@@ -157,6 +157,7 @@ RECENT FAILURES:
         # L2: Supporting Context
         # Relevant symbols, touched file dependencies, previous plan
         symbol_index = self._load_json_artifact("symbol_index.json")
+        symbol_definitions = self._load_json_artifact("symbol_definitions.json")
         repo_map = self._load_json_artifact("repo_map.json")
         
         l2_text_components = []
@@ -170,12 +171,25 @@ RECENT FAILURES:
             for file_path, symbols in symbol_index.get("files", {}).items():
                 for sym_name, sym_type in symbols.items():
                     if any(kw in sym_name.lower() or kw in file_path.lower() for kw in issue_keywords):
-                        relevant_symbols.append(f"- {sym_type} {sym_name} in {file_path}")
+                        snippet = ""
+                        if symbol_definitions:
+                            sym_def = symbol_definitions.get("files", {}).get(file_path, {}).get(sym_name, {})
+                            snippet = sym_def.get("snippet", "")
+                        
+                        if snippet:
+                            # Truncate massive classes/functions to ~40 lines to preserve token budget
+                            # Allows the planner to see the __init__ and signatures, but not the whole body
+                            lines = snippet.split('\n')
+                            if len(lines) > 40:
+                                snippet = '\n'.join(lines[:40]) + '\n    # ... (body truncated to save context window)'
+                            relevant_symbols.append(f"### {sym_type.upper()}: {sym_name} (in {file_path})\n```python\n{snippet}\n```")
+                        else:
+                            relevant_symbols.append(f"- {sym_type} {sym_name} in {file_path}")
                         
         if relevant_symbols:
-            # Take top 20 relevant symbols to avoid blowing budget
-            sym_text = "\n".join(relevant_symbols[:20])
-            l2_text_components.append(f"RELEVANT SYMBOLS FOUND:\n{sym_text}")
+            # Take top 15 relevant symbols to avoid blowing budget (was 20, but now they are much larger blocks)
+            sym_text = "\n\n".join(relevant_symbols[:15])
+            l2_text_components.append(f"RELEVANT SYMBOL DEFINITIONS:\n{sym_text}")
         elif repo_map:
             # Fallback to general repo map summary if no symbols matched
             l2_text_components.append(f"REPO MAP SUMMARY:\n{str(repo_map)[:1000]}")

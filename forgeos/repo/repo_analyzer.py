@@ -13,11 +13,11 @@ class SymbolVisitor(ast.NodeVisitor):
         self.imports = []
         
     def visit_ClassDef(self, node):
-        self.classes.append(node.name)
+        self.classes.append({'name': node.name, 'lineno': getattr(node, 'lineno', 1), 'end_lineno': getattr(node, 'end_lineno', getattr(node, 'lineno', 1))})
         self.generic_visit(node)
         
     def visit_FunctionDef(self, node):
-        self.functions.append(node.name)
+        self.functions.append({'name': node.name, 'lineno': getattr(node, 'lineno', 1), 'end_lineno': getattr(node, 'end_lineno', getattr(node, 'lineno', 1))})
         self.generic_visit(node)
         
     def visit_Import(self, node):
@@ -60,9 +60,26 @@ class RepoAnalyzer:
         analyzer = SymbolVisitor()
         analyzer.visit(tree)
         
+        # Extract source code snippets
+        lines = content.split('\n')
+        rich_classes = []
+        rich_functions = []
+        
+        for cls in analyzer.classes:
+            start_idx = max(0, cls['lineno'] - 1)
+            end_idx = min(len(lines), cls['end_lineno'])
+            snippet = '\n'.join(lines[start_idx:end_idx])
+            rich_classes.append({'name': cls['name'], 'snippet': snippet})
+            
+        for func in analyzer.functions:
+            start_idx = max(0, func['lineno'] - 1)
+            end_idx = min(len(lines), func['end_lineno'])
+            snippet = '\n'.join(lines[start_idx:end_idx])
+            rich_functions.append({'name': func['name'], 'snippet': snippet})
+        
         return {
-            "classes": analyzer.classes,
-            "functions": analyzer.functions,
+            "classes": rich_classes,
+            "functions": rich_functions,
             "imports": analyzer.imports
         }
 
@@ -186,6 +203,7 @@ class RepoAnalyzer:
         try:
             # Generate derivative artifacts for targeted test selection and prompt compression
             symbol_index = {"files": {}}
+            symbol_definitions = {"files": {}}
             import_graph = {}
             test_map = {}
             
@@ -198,13 +216,23 @@ class RepoAnalyzer:
                     continue
                     
                 # Build Symbol Index matching ContextPackBuilder's expectation: {"files": {"path/to/file": {"Symbol": "class/func"}}}
+                # And build Symbol Definitions: {"files": {"path/to/file": {"Symbol": {"type": "class", "snippet": "..."}}}}
                 if filepath not in symbol_index["files"]:
                     symbol_index["files"][filepath] = {}
+                    symbol_definitions["files"][filepath] = {}
                     
                 for cls in data.get("classes", []):
-                    symbol_index["files"][filepath][cls] = "class"
+                    # Handle both old (string) and new (dict) formats during cache transition
+                    name = cls["name"] if isinstance(cls, dict) else cls
+                    snippet = cls.get("snippet", "") if isinstance(cls, dict) else ""
+                    symbol_index["files"][filepath][name] = "class"
+                    symbol_definitions["files"][filepath][name] = {"type": "class", "snippet": snippet}
+                    
                 for func in data.get("functions", []):
-                    symbol_index["files"][filepath][func] = "function"
+                    name = func["name"] if isinstance(func, dict) else func
+                    snippet = func.get("snippet", "") if isinstance(func, dict) else ""
+                    symbol_index["files"][filepath][name] = "function"
+                    symbol_definitions["files"][filepath][name] = {"type": "function", "snippet": snippet}
                     
                 import_graph[filepath] = data.get("imports", [])
                 
@@ -226,6 +254,8 @@ class RepoAnalyzer:
                 json.dump(repo_map, f, indent=2)
             with open(os.path.join(cache_dir, "symbol_index.json"), "w", encoding="utf-8") as f:
                 json.dump(symbol_index, f, indent=2)
+            with open(os.path.join(cache_dir, "symbol_definitions.json"), "w", encoding="utf-8") as f:
+                json.dump(symbol_definitions, f, indent=2)
             with open(os.path.join(cache_dir, "import_graph.json"), "w", encoding="utf-8") as f:
                 json.dump(import_graph, f, indent=2)
             with open(os.path.join(cache_dir, "test_map.json"), "w", encoding="utf-8") as f:
