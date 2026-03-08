@@ -25,6 +25,7 @@ class EngineState(str, Enum):
 class ExecutionContext(BaseModel):
     issue_number: Optional[int] = None
     repo_path: Optional[str] = None
+    github_url: Optional[str] = None   # GitHub repo URL for issue fetch + PR creation
     plan: Optional[str] = None
     patch: Optional[str] = None
     test_results: Optional[Dict[str, Any]] = None
@@ -78,56 +79,76 @@ class StateMachine:
 
     def run(self, context: ExecutionContext) -> ExecutionContext:
         """Execute the state machine until DONE or FAILED."""
-        while context.current_state not in [EngineState.DONE, EngineState.FAILED]:
-            handler = self.handlers.get(context.current_state)
-            if not handler:
-                context.logs.append(f"No handler found for state: {context.current_state}")
-                context.current_state = EngineState.FAILED
-                break
-            
-            prev_state = context.current_state.value
-            context.logs.append(f"Entering state: {context.current_state.value}")
-            try:
-                # Transition to the next state
-                context = handler(context)
-                new_state = context.current_state.value
-                
-                # Emit SSE Timeline Event
-                if context.telemetry and prev_state != new_state:
-                    context.telemetry.log_event(
-                        "state_transition",
-                        context.issue_number or 0,
-                        new_state,
-                        f"Transitioned from {prev_state} to {new_state}",
-                        {"from": prev_state, "to": new_state, "issue": f"{context.repo_path}#{context.issue_number}" if context.issue_number else "Engine"}
-                    )
-                
-                # Enforce Hard Cap
-                if context.global_cost >= MAX_COST_PER_ISSUE:
-                    context.logs.append(f"CRITICAL WARNING: Max budget exceeded (${context.global_cost:.4f} / ${MAX_COST_PER_ISSUE:.4f}). Halting to prevent runaway costs.")
+        try:
+            while context.current_state not in [EngineState.DONE, EngineState.FAILED]:
+                handler = self.handlers.get(context.current_state)
+                if not handler:
+                    context.logs.append(f"No handler found for state: {context.current_state}")
+                    self.mark_progress(context, context.current_state.value, EngineState.FAILED.value)
                     context.current_state = EngineState.FAILED
-                    # To let upstream know why it failed
-                    context.test_results = {"status": "failed", "errors": "Max budget exceeded. Execution forcefully halted.", "command": "Engine Governor"}
-                    
-            except Exception as e:
-                context.logs.append(f"Error in state {context.current_state.value}: {str(e)}")
-                context.current_state = EngineState.FAILED
+                    break
                 
-        context.logs.append(f"Execution finished with state: {context.current_state.value}")
-        if context.telemetry:
-            context.telemetry.log_event("execution_finished", context.issue_number, context.current_state.value, f"Engine finished with state {context.current_state.value}")
-            
-        if context.current_state == EngineState.FAILED:
-            try:
-                from forgeos.memory.failure_miner import FailureIntelligenceEngine
-                miner = FailureIntelligenceEngine()
-                miner.mine_failure(context)
-            except Exception as e:
-                context.logs.append(f"[FailureMiner] Hook crashed: {e}")
+                prev_state = context.current_state.value
+                context.logs.append(f"Entering state: {prev_state}")
+                try:
+                    # Transition to the next state
+                    context = handler(context)
+                    new_state = context.current_state.value
+                    
+                    if prev_state != new_state:
+                        self.mark_progress(context, prev_state, new_state)
+                    
+                    # Enforce Hard Cap
+                    if context.global_cost >= MAX_COST_PER_ISSUE:
+                        context.logs.append(f"CRITICAL WARNING: Max budget exceeded (${context.global_cost:.4f} / ${MAX_COST_PER_ISSUE:.4f}). Halting to prevent runaway costs.")
+                        self.mark_progress(context, context.current_state.value, EngineState.FAILED.value)
+                        context.current_state = EngineState.FAILED
+                        # To let upstream know why it failed
+                        context.test_results = {"status": "failed", "errors": "Max budget exceeded. Execution forcefully halted.", "command": "Engine Governor"}
+                        
+                except Exception as e:
+                    import traceback
+                    context.logs.append(f"Error in state {context.current_state.value}: {str(e)}\n{traceback.format_exc()}")
+                    self.mark_progress(context, context.current_state.value, EngineState.FAILED.value)
+                    context.current_state = EngineState.FAILED
+                    
+            context.logs.append(f"Execution finished with state: {context.current_state.value}")
+            if context.telemetry:
+                context.telemetry.log_event("execution_finished", context.issue_number, context.current_state.value, f"Engine finished with state {context.current_state.value}")
+                
+            if context.current_state == EngineState.FAILED:
+                try:
+                    from forgeos.memory.failure_miner import FailureIntelligenceEngine
+                    miner = FailureIntelligenceEngine()
+                    miner.mine_failure(context)
+                except Exception as e:
+                    context.logs.append(f"[FailureMiner] Hook crashed: {e}")
+                    
+        except Exception as outer_e:
+            context.logs.append(f"CRITICAL ENGINE FAULT: {outer_e}")
+            if context.current_state not in [EngineState.DONE, EngineState.FAILED]:
+                self.mark_progress(context, context.current_state.value, EngineState.FAILED.value)
+                context.current_state = EngineState.FAILED
+        finally:
+            # The Ultimate Safeguard — Ensure terminal transitions are broadcasted even on thread death
+            if context.current_state not in [EngineState.DONE, EngineState.FAILED]:
+                context.logs.append("WARNING: Engine loop exited but state is not DONE or FAILED. Forcing FAILED.")
+                self.mark_progress(context, context.current_state.value, "FAILED_ORPHANED")
+                context.current_state = EngineState.FAILED
                 
         return context
 
     # --- Handlers (Mocks for now, delegates to actual modules later) ---
+    
+    def touch_heartbeat(self, context: ExecutionContext, message: str = "Heartbeat"):
+        """Emits a task_heartbeat event to update the API gateway's last seen time."""
+        if context.telemetry:
+            context.telemetry.log_event("task_heartbeat", context.issue_number or "task", context.current_state.value, message)
+
+    def mark_progress(self, context: ExecutionContext, from_state: str, to_state: str):
+        """Emits a specialized task_progress event signifying forward motion."""
+        if context.telemetry:
+            context.telemetry.log_event("task_progress", context.issue_number or "task", to_state, f"Progressed from {from_state} to {to_state}")
     
     def log_and_record(self, context: ExecutionContext, message: str, event_type: str = "state_transition", metadata: Dict[str, Any] = None):
         """Helper to append to local memory array and write to structured telemetry."""
@@ -178,6 +199,7 @@ class StateMachine:
 
     def handle_init(self, context: ExecutionContext) -> ExecutionContext:
         self.log_and_record(context, "Initializing execution context.")
+        self.touch_heartbeat(context, "Context Initialized")
         
         if context.repo_path and context.repo_path.startswith("http"):
             from forgeos.sandbox.sandbox_runner import SandboxRunner
@@ -197,9 +219,14 @@ class StateMachine:
         github = GitHubConnector()
         
         try:
-            repo_full_name = context.repo_path.replace("https://github.com/", "").replace(".git", "") if context.repo_path else "mock/repo"
+            # Use github_url if set (separate from local repo_path)
+            github_source = context.github_url or context.repo_path or ""
+            repo_full_name = github_source.replace("https://github.com/", "").replace(".git", "")
+            # Reject local paths (they don't start with a valid org/repo format)
+            if repo_full_name.startswith("/") or "\\" in repo_full_name:
+                raise ValueError(f"Not a GitHub URL: {repo_full_name}")
             issue_data = github.fetch_issue(repo_full_name, context.issue_number)
-            context.issue_text = f"Title: {issue_data['title']}\\nBody: {issue_data['body']}"
+            context.issue_text = f"Title: {issue_data['title']}\nBody: {issue_data['body']}"
         except Exception as e:
             self.log_and_record(context, f"GitHub fetch failed: {e}. Trying to load from local dataset.", event_type="warning")
             # MVP Fallback: check if we have a local task definition (useful for Gauntlet)
@@ -223,16 +250,44 @@ class StateMachine:
         
         context.spec_context = parsed_ctx["system_context"]
         context.traceability_id = parsed_ctx["traceability_id"]
-        
+
+        # ── Source Code Injection ─────────────────────────────────────────────
+        # Parse the issue text for explicit file path mentions and inject their
+        # content into spec_context so the planner LLM targets the real files.
+        import re, glob
+        file_refs = re.findall(r'[\w/]+\.py', context.issue_text or "")
+        injected_srcs = []
+        for fref in file_refs[:5]:   # cap at 5 files
+            # Try relative to repo_path first, then project root
+            candidates = [
+                os.path.join(context.repo_path or ".", fref),
+                os.path.join(context.repo_path or ".", *fref.split("/")),
+            ]
+            for cpath in candidates:
+                if os.path.exists(cpath):
+                    try:
+                        with open(cpath, "r", encoding="utf-8") as f:
+                            src = f.read()
+                        injected_srcs.append(
+                            f"\n\n=== SOURCE FILE: {fref} ===\n{src[:4000]}"
+                        )
+                    except Exception:
+                        pass
+                    break
+        if injected_srcs:
+            context.spec_context = (context.spec_context or "") + "\n".join(injected_srcs)
+            context.logs.append(f"Injected {len(injected_srcs)} source file(s) into planner context.")
+
         # Epic 46: Feature Flag for A/B Benchmarking
         if os.environ.get("FORGEOS_ENABLE_PATTERN_LIB", "true").lower() == "false":
             context.logs.append("OMNIBENCH: Pattern Library disabled via feature flag. Skipping retrieval.")
             context.pattern_context = {"similar_patterns_found": 0, "status": "Disabled via flag."}
             context.current_state = EngineState.PLAN
             return context
-            
+
         context.current_state = EngineState.PATTERN_RETRIEVAL
         return context
+
         
     def handle_pattern_retrieval(self, context: ExecutionContext) -> ExecutionContext:
         self.log_and_record(context, "Consulting Experience Memory (Pattern Library) for historical engineering patterns.")
@@ -289,6 +344,7 @@ class StateMachine:
         
     def handle_plan(self, context: ExecutionContext) -> ExecutionContext:
         self.log_and_record(context, f"Planning task execution.", metadata={"traceability_id": context.traceability_id})
+        self.touch_heartbeat(context, "Started Planning")
         
         # Instantiate ProviderRouter and PlannerAgent
         from forgeos.providers.model_router import ProviderRouter
@@ -362,6 +418,7 @@ class StateMachine:
         """Runs N strategy branches in parallel, selects the winner, and injects it into the pipeline."""
         self.log_and_record(context, "[BRANCH_RACE] Starting speculative parallelism — racing strategies.",
                             metadata={"racing_enabled": True})
+        self.touch_heartbeat(context, "Starting Speculative Race")
         try:
             from forgeos.engine.branch_manager import StrategyBranchManager
             n = 3 if getattr(context, "retries", 0) > 0 else 2  # 3 branches on retry, 2 on first pass
@@ -373,65 +430,86 @@ class StateMachine:
                     f"sim={'APPROVED' if winner.sim_approved else 'REJECTED'} | cost=${winner.cost:.3f}"
                 )
                 # Inject winner into pipeline
+                self.touch_heartbeat(context, f"Selected Winner '{winner.strategy_type}'")
                 if winner.plan:
                     context.plan = winner.plan
                 if winner.patch:
                     context.patch = winner.patch
-                context.global_cost += sum(getattr(r, 'cost', 0) for r in [])
+                
+                # The winner cost is currently logged, but we should add it to global
+                context.global_cost += winner.cost
+                
                 # Store all branch results for Mission Control
                 context.branch_results = []
+                self.mark_progress(context, EngineState.BRANCH_RACE.value, EngineState.IMPACT_ANALYSIS.value)
             else:
                 context.logs.append("[BRANCH_RACE] No viable winner. Falling back to linear execution.")
+                self.mark_progress(context, EngineState.BRANCH_RACE.value, EngineState.IMPACT_ANALYSIS.value)
         except Exception as e:
-            context.logs.append(f"[BRANCH_RACE] Crashed: {e}. Continuing linear.")
+            import traceback
+            context.logs.append(f"[BRANCH_RACE] Crashed: {e}\n{traceback.format_exc()}. Continuing linear.")
+            self.mark_progress(context, EngineState.BRANCH_RACE.value, EngineState.IMPACT_ANALYSIS.value)
 
         context.current_state = EngineState.IMPACT_ANALYSIS
         return context
 
     def handle_impact_analysis(self, context: ExecutionContext) -> ExecutionContext:
-        context.logs.append("Analyzing impact radius and risk score of proposed plan.")
+        self.log_and_record(context, "Analyzing impact radius and risk score of proposed plan.")
         
         from forgeos.repo.impact_engine import ImpactEngine
         from forgeos.repo.repo_analyzer import RepoAnalyzer
         analyzer = RepoAnalyzer(context.repo_path if context.repo_path else ".")
-        repo_map = analyzer.generate_repo_map()
-        impact_engine = ImpactEngine(repo_map)
+        impact = ImpactEngine(analyzer)
         
-        # Simple mocked touched files for MVP
-        touched_files = ["api/auth.py"]
-        impact_report = impact_engine.analyze_impact(touched_files)
-        
-        if context.artifact_manager:
-            context.artifact_manager.save_impact_report(impact_report)
-            context.logs.append("Impact report saved to artifact layer.")
+        try:
+            plan_str = context.plan if context.plan else ""
+            touched_files = [f for f in context.repo_map.keys()][:3] if context.repo_map else []
+            report = impact.analyze_impact(touched_files)
             
-        context.logs.append(f"Impact: {impact_report['risk_score']} Risk. Strategy: {impact_report['allowed_strategy']}.")
+            if context.artifact_manager:
+                context.artifact_manager.save_impact_report(report)
+                
+            context.logs.append(f"Impact Analysis Complete: Risk={report.get('risk_score')}, AffectedFiles={len(report.get('affected_files', []))}")
+            if context.telemetry:
+                context.telemetry.log_event("impact_analysis", context.issue_number, context.current_state.value, report.get('risk_score', 'medium'))
+                
+        except Exception as e:
+            context.logs.append(f"Impact Analysis failed: {e}. Defaulting to High Risk.")
+            if context.artifact_manager:
+                context.artifact_manager.save_impact_report({"risk_score": "high", "error": str(e)})
+
         context.current_state = EngineState.PATCH
         return context
 
     def handle_patch(self, context: ExecutionContext) -> ExecutionContext:
-        context.logs.append("Applying patch via Coder module.")
-        # Instantiate ProviderRouter and CoderAgent
-        from forgeos.providers.model_router import ProviderRouter
-        from forgeos.engine.agents import CoderAgent
+        print("[DEBUG] Inside handle_patch: Starting!")
+        self.log_and_record(context, "Drafting Code Patch via Coder module.")
         
-        from forgeos.repo.repo_analyzer import RepoAnalyzer
-        from forgeos.engine.context_pack import ContextPackBuilder
-        analyzer = RepoAnalyzer(context.repo_path if context.repo_path else ".")
-        pack_builder = ContextPackBuilder(context, analyzer)
-        coder_prompt = pack_builder.build_coder_prompt()
-        
-        router = ProviderRouter()
-        coder = CoderAgent(router)
-        
-        context.patch, stats = coder.generate_patch(coder_prompt)
-        
-        cost = stats.get("cost", 0.0)
-        context.global_cost += cost
-        context.logs.append(f"Patch generated via {stats['model']} [COST: ${cost:.4f}]")
-        
-        if context.telemetry:
-            context.telemetry.log_cost(context.issue_number, context.current_state.value, stats["model"], stats["prompt_tokens"], stats["completion_tokens"])
+        if not context.patch:
+            # Instantiate ProviderRouter and CoderAgent
+            from forgeos.providers.model_router import ProviderRouter
+            from forgeos.engine.agents import CoderAgent
+            
+            from forgeos.repo.repo_analyzer import RepoAnalyzer
+            from forgeos.engine.context_pack import ContextPackBuilder
+            analyzer = RepoAnalyzer(context.repo_path if context.repo_path else ".")
+            pack_builder = ContextPackBuilder(context, analyzer)
+            coder_prompt = pack_builder.build_coder_prompt()
+            
+            router = ProviderRouter()
+            coder = CoderAgent(router)
+            
+            context.patch, stats = coder.generate_patch(coder_prompt)
+            
+            cost = stats.get("cost", 0.0)
+            context.global_cost += cost
+            context.logs.append(f"Patch generated via {stats['model']} [COST: ${cost:.4f}]")
+            
+            if context.telemetry:
+                context.telemetry.log_cost(context.issue_number, context.current_state.value, stats["model"], stats["prompt_tokens"], stats["completion_tokens"])
+        else:
+            print("[DEBUG] Inside handle_patch: using BRANCH_RACE winning patch")
+            context.logs.append("Patch already provided (likely from BRANCH_RACE winner). Skipping Coder generation.")
         
         if context.artifact_manager:
             # We determine attempt based on how many times failure memory recorded a failure for this strategy
@@ -477,6 +555,7 @@ class StateMachine:
             context.patch_scope_context = {}
         context.patch_scope_context["scope_class"] = analysis.scope_class.value
         
+        print("[DEBUG] Inside handle_patch: Entering EXECUTION_CRITIC!")
         context.current_state = EngineState.EXECUTION_CRITIC
         return context
 
@@ -499,22 +578,36 @@ class StateMachine:
         sec_critic = SecurityCritic(router)
         
         repo_map_str = context.spec_context if hasattr(context, 'spec_context') else "Unknown architecture"
+        print("[DEBUG] Inside handle_execution_critic: Calling ArchitectureCritic!")
         arch_res, arch_stats = arch_critic.evaluate(repo_map=repo_map_str, patch=context.patch or "")
+        print("[DEBUG] Inside handle_execution_critic: Calling SecurityCritic!")
         sec_res, sec_stats = sec_critic.evaluate(patch=context.patch or "")
+        print("[DEBUG] Inside handle_execution_critic: Both critics returned!")
         
         total_cost = arch_stats.get("cost", 0.0) + sec_stats.get("cost", 0.0)
         context.global_cost += total_cost
         context.logs.append(f"Patch reviewed via Multi-Critic [COST: ${total_cost:.4f}]")
-        
         if context.telemetry:
             context.telemetry.log_cost(context.issue_number, context.current_state.value, "Multi-Critic", 0, 0)
         
         arch_status = arch_res.get("status", "APPROVED")
         sec_status = sec_res.get("status", "APPROVED")
-        
-        if arch_status == "APPROVED" and sec_status == "APPROVED":
-            context.logs.append("Multi-Critic APPROVED the patch.")
-            
+
+        # Only hard-reject on explicitly structural/security-critical decisions
+        # WARN / CAUTION / APPROVED all proceed — only REJECTED or BLOCKED halt execution
+        BLOCK_STATUSES = {"REJECTED", "BLOCKED"}
+
+        if arch_status not in BLOCK_STATUSES and sec_status not in BLOCK_STATUSES:
+            if arch_status != "APPROVED" or sec_status != "APPROVED":
+                notes = []
+                if arch_status != "APPROVED":
+                    notes.append(f"[Architecture Note] {arch_res.get('reason','')}")
+                if sec_status != "APPROVED":
+                    notes.append(f"[Security Note] {sec_res.get('reason','')}")
+                context.logs.append(f"Multi-Critic WARNING (proceeding): {' | '.join(notes)}")
+            else:
+                context.logs.append("Multi-Critic APPROVED the patch.")
+
             # Epic 46: Feature Flag for A/B Benchmarking
             if os.environ.get("FORGEOS_ENABLE_PATCH_SIM", "true").lower() == "false":
                 context.logs.append("OMNIBENCH: Patch Simulation disabled via feature flag. Proceeding directly to tests.")
@@ -523,9 +616,9 @@ class StateMachine:
                 context.current_state = EngineState.PATCH_SIMULATION
         else:
             reasons = []
-            if arch_status != "APPROVED":
+            if arch_status in BLOCK_STATUSES:
                 reasons.append(f"[Architecture] {arch_res.get('reason')} - Advice: {arch_res.get('advice')}")
-            if sec_status != "APPROVED":
+            if sec_status in BLOCK_STATUSES:
                 reasons.append(f"[Security] {sec_res.get('reason')} - Advice: {sec_res.get('advice')}")
                 
             rejection_text = "\\n".join(reasons)
@@ -541,8 +634,11 @@ class StateMachine:
         return context
 
     def handle_patch_simulation(self, context: ExecutionContext) -> ExecutionContext:
-        context.logs.append("Simulating patch impact (Contract Breaks / Async Hazards).")
+        print("[DEBUG] Inside handle_patch_simulation: Starting!")
+        self.log_and_record(context, "[PATCH_SIMULATION] Executing Static Patch Simulation (Risk & Semantic Gate).")
+        self.touch_heartbeat(context, "Starting Patch Simulation via Ast/LLM")
         
+        print("[DEBUG] Inside handle_patch_simulation: Importing PatchSimulatorAgent!")
         from forgeos.providers.model_router import ProviderRouter
         from forgeos.agents.critics.impact_simulator import PatchSimulatorAgent
         from forgeos.repo.repo_analyzer import RepoAnalyzer
@@ -557,26 +653,28 @@ class StateMachine:
         except Exception:
             symbol_index_str = "Symbol index unavailable."
             
-        res, stats = simulator.simulate_impact(
-            issue_text=context.issue_text,
+        print("[DEBUG] Inside handle_patch_simulation: Calling simulate_impact()!")
+        sim_res, sim_stats = simulator.simulate_impact(
+            issue_text=context.spec_context,
             patch=context.patch or "",
             symbol_index_str=symbol_index_str
         )
+        print("[DEBUG] Inside handle_patch_simulation: simulate_impact() returned!")
         
-        cost = stats.get("cost", 0.0)
+        cost = sim_stats.get("cost", 0.0)
         context.global_cost += cost
-        context.logs.append(f"Patch simulation completed via {stats.get('model', 'none')} [COST: ${cost:.4f}]")
+        context.logs.append(f"Patch simulation completed via {sim_stats.get('model', 'none')} [COST: ${cost:.4f}]")
         
         if context.telemetry:
-            context.telemetry.log_event("patch_simulation", context.issue_number, context.current_state.value, "Simulation finished.", {"cost": cost, "risk": res.get("risk_score")})
+            context.telemetry.log_event("patch_simulation", context.issue_number, context.current_state.value, "Simulation finished.", {"cost": cost, "risk": sim_res.get("risk_score")})
             
-        decision = res.get("strategy_decision", "proceed")
-        reasoning = res.get("reasoning", "No structural risks found.")
+        decision = sim_res.get("strategy_decision", "proceed")
+        reasoning = sim_res.get("reasoning", "No structural risks found.")
         
         # Store the verification scope recommendation dynamically so sandbox_runner can read it later
-        if not hasattr(context, "simulation_context"):
+        if not context.simulation_context:
             context.simulation_context = {}
-        context.simulation_context["verification_scope_recommendation"] = res.get("verification_scope_recommendation", "unit_only")
+        context.simulation_context["verification_scope_recommendation"] = sim_res.get("verification_scope_recommendation", "unit_only")
         
         context.logs.append(f"Simulation Decision: {decision}. Reason: {reasoning}")
         
@@ -597,11 +695,78 @@ class StateMachine:
 
     def handle_run_tests(self, context: ExecutionContext) -> ExecutionContext:
         context.logs.append("Running tests in sandbox.")
-        
+        self.touch_heartbeat(context, "Bootstrapping environment and running tests")
+
+        # ── Apply patch to disk before running tests ──────────────────────────
+        # context.patch is a unified diff string. Write it to a temp file and
+        # apply it with `git apply` so pytest evaluates the patched code.
+        patch_applied = False
+        repo_path = context.repo_path if context.repo_path else "."
+        patch_tmp = None
+        if context.patch:
+            import tempfile, subprocess as sp
+            try:
+                # Strip markdown fences if present (LLM sometimes wraps in ```diff)
+                raw_patch = context.patch
+                lines = raw_patch.split("\n")
+                
+                # First, unpack from markdown fences if needed
+                if "```" in raw_patch:
+                    inside = False
+                    fenced_lines = []
+                    for line in lines:
+                        if line.startswith("```"):
+                            inside = not inside
+                            continue
+                        if inside:
+                            fenced_lines.append(line)
+                    lines = fenced_lines
+
+                # Now aggressively sanitize to valid git-apply lines
+                patch_lines = []
+                for line in lines:
+                    # Valid patch lines start with these prefixes.
+                    # Relaxed a bit to avoid stripping normal diff context
+                    valid_starts = ("---", "+++", "@@", "+", "-", " ", "\\", "diff ", "index ")
+                    if any(line.startswith(prefix) for prefix in valid_starts) or line.strip() == "":
+                        patch_lines.append(line)
+                        
+                raw_patch = "\n".join(patch_lines)
+
+
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
+                    f.write(raw_patch)
+                    patch_tmp = f.name
+
+                result = sp.run(
+                    ["git", "apply", "--whitespace=fix", patch_tmp],
+                    cwd=repo_path, capture_output=True, text=True
+                )
+                if result.returncode == 0:
+                    patch_applied = True
+                    context.logs.append(f"Patch applied successfully via git apply.")
+                else:
+                    context.logs.append(f"git apply failed (rc={result.returncode}): {result.stderr[:200]}")
+                    context.logs.append(f"Attempting fallback to GNU patch...")
+                    # Fallback to patch with a generous fuzz factor
+                    result2 = sp.run(
+                        ["patch", "-p1", "-F3", "-i", patch_tmp],
+                        cwd=repo_path, capture_output=True, text=True
+                    )
+                    if result2.returncode == 0:
+                        patch_applied = True
+                        context.logs.append(f"Patch applied successfully via patch fallback.")
+                    else:
+                        context.logs.append(f"GNU patch fallback failed (rc={result2.returncode}): {result2.stderr[:200]}\nStdout: {result2.stdout[:200]}")
+
+            except Exception as e:
+                context.logs.append(f"Patch application error: {e}")
+
         # Load Sandbox
         from forgeos.sandbox.sandbox_runner import SandboxRunner
         runner = SandboxRunner()
-        
+
+
         # Determine Verification Scope
         test_targets = []
         if context.artifact_manager:
@@ -670,12 +835,31 @@ class StateMachine:
 
         # In MVP, this relies on sandbox doing real things or mock if test_command fails
         context.test_results = runner.run_tests(context.repo_path if context.repo_path else ".", test_targets=test_targets)
-        
+
+        # ── Revert patch after tests ──────────────────────────────────────────
+        # Always restore the repo to clean state after testing regardless of result
+        if patch_applied:
+            try:
+                import subprocess as sp
+                sp.run(["git", "checkout", "--", "."], cwd=repo_path, capture_output=True)
+                if patch_tmp and os.path.exists(patch_tmp):
+                    os.unlink(patch_tmp)
+                context.logs.append("Repo restored to clean state after test run.")
+            except Exception as e:
+                context.logs.append(f"Warning: could not revert patch: {e}")
+
         if context.artifact_manager:
             context.artifact_manager.save_test_results(context.test_results)
-            
+
+        context.logs.append(
+            f"Test run complete: status={context.test_results.get('status')} "
+            f"returncode={context.test_results.get('returncode')} "
+            f"patch_applied={patch_applied}"
+        )
+
         context.current_state = EngineState.VERIFY
         return context
+
 
     def handle_verify(self, context: ExecutionContext) -> ExecutionContext:
         context.logs.append("Verifying test results and applying critique if necessary.")

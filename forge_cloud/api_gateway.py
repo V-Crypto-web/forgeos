@@ -36,21 +36,58 @@ app.mount("/dashboard", StaticFiles(directory=dashboard_path, html=True), name="
 async def serve_dashboard():
     return FileResponse(os.path.join(dashboard_path, "index.html"))
 
-# ── Task Registry ─────────────────────────────────────────────────────────────
-# Full TaskRecord dict per task_id. Replaces the old ACTIVE_TASKS: dict[str, str].
-TASK_REGISTRY: dict = {}
+# ── Task Registry (persistent) ────────────────────────────────────────────────
+TASK_REGISTRY_PATH = "/tmp/forgeos_task_registry.json"
+
+class _PersistentRegistry(dict):
+    """Dict subclass that auto-saves to disk on every write."""
+    def __init__(self, path: str):
+        super().__init__()
+        self._path = path
+        self._load()
+
+    def _load(self):
+        if os.path.exists(self._path):
+            try:
+                with open(self._path, "r", encoding="utf-8") as f:
+                    self.update(json.load(f))
+            except Exception:
+                pass
+
+    def _save(self):
+        try:
+            with open(self._path, "w", encoding="utf-8") as f:
+                json.dump(dict(self), f, default=str)
+        except Exception:
+            pass
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._save()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._save()
+
+TASK_REGISTRY: dict = _PersistentRegistry(TASK_REGISTRY_PATH)
 
 def _make_task_record(task_id: str, repo: str, issue: int, mode: str) -> dict:
+    now_iso = datetime.utcnow().isoformat() + "Z"
     return {
         "id": task_id,
         "repo": repo,
         "issue": issue,
         "mode": mode,
         "status": "RUNNING",
-        "started_at": datetime.utcnow().isoformat() + "Z",
+        "started_at": now_iso,
+        "updated_at": now_iso,
+        "last_progress_at": now_iso,
+        "heartbeat_at": now_iso,
         "current_state": "INIT",
+        "terminal_reason": None,
         "pr_url": None,
     }
+
 
 # ── Request Models ─────────────────────────────────────────────────────────────
 class ProjectCreateRequest(BaseModel):
@@ -85,10 +122,12 @@ def _run_engine_background(repo_path: str, issue_number: int, task_id: str):
 
         context = ExecutionContext(
             repo_path=repo_path,
+            github_url=TASK_REGISTRY[task_id].get("github_url", ""),
             issue_number=issue_number,
             strategy=TASK_REGISTRY[task_id].get("mode", "supervised"),
             racing_enabled=True,
         )
+
 
         sm = StateMachine()
 
@@ -96,6 +135,15 @@ def _run_engine_background(repo_path: str, issue_number: int, task_id: str):
         # Monkey-patch log_and_record so EVERY transition is reflected in the UI
         _orig_log = sm.log_and_record
         def _live_log(ctx, message, event_type="state_transition", metadata=None):
+            now = datetime.utcnow().isoformat() + "Z"
+            TASK_REGISTRY[task_id]["updated_at"] = now
+            
+            if event_type == "task_heartbeat":
+                TASK_REGISTRY[task_id]["heartbeat_at"] = now
+            elif event_type == "task_progress" or event_type == "state_transition":
+                TASK_REGISTRY[task_id]["last_progress_at"] = now
+                TASK_REGISTRY[task_id]["heartbeat_at"] = now
+                
             # Update registry with current state immediately
             TASK_REGISTRY[task_id]["current_state"] = ctx.current_state.value if hasattr(ctx.current_state, "value") else str(ctx.current_state)
             TASK_REGISTRY[task_id]["logs"] = ctx.logs[-50:]  # last 50 log lines
@@ -186,6 +234,12 @@ async def task_action(task_id: str, req: TaskActionRequest):
 # ── Self-Improvement Run ──────────────────────────────────────────────────────
 @app.post("/api/v1/improvement/run")
 async def run_improvement(req: ImprovementRunRequest, background_tasks: BackgroundTasks):
+    """
+    Dispatches a self-improvement engine run for the given epic.
+    Uses `repo_path` (local) for engine execution (tests run with existing .venv).
+    Uses `repo_url` (GitHub) for issue fetching + PR creation metadata.
+    Falls back to local ForgeAI path if neither is specified.
+    """
     path = "/Users/vasiliyprachev/Python_Projects/ForgeAI/forge_cloud/data/improvement_backlog.json"
     if os.path.exists(path):
         with open(path, "r") as f:
@@ -193,13 +247,32 @@ async def run_improvement(req: ImprovementRunRequest, background_tasks: Backgrou
         target = next((item for item in backlog if item["id"] == req.epic_id), None)
         if not target:
             raise HTTPException(status_code=404, detail="Epic not found")
+
+        # Local path for execution (has working .venv + dependencies)
+        # GitHub URL stored separately for issue fetch + PR creation
+        LOCAL_FORGEOS = "/Users/vasiliyprachev/Python_Projects/ForgeAI"
+        exec_path    = target.get("repo_path") or LOCAL_FORGEOS
+        github_url   = target.get("repo_url", "")
+        issue_number = target.get("github_issue", 0)
+
         task_id = f"task_self_{req.epic_id.replace('-', '_')}_{str(uuid4())[:8]}"
-        record = _make_task_record(task_id, "/Users/vasiliyprachev/Python_Projects/ForgeAI", 0, "supervised")
-        record["epic_id"] = req.epic_id
+        record = _make_task_record(task_id, exec_path, issue_number, "supervised")
+        record["epic_id"]    = req.epic_id
+        record["epic_title"] = target.get("title", "")
+        record["github_url"] = github_url   # stored for PR creation
         TASK_REGISTRY[task_id] = record
-        background_tasks.add_task(_run_engine_background, "/Users/vasiliyprachev/Python_Projects/ForgeAI", 0, task_id)
-        return {"status": "accepted", "task_id": task_id, "message": f"Self-Improvement loop started for {req.epic_id}"}
-    raise HTTPException(status_code=500, detail="Database missing")
+        background_tasks.add_task(_run_engine_background, exec_path, issue_number, task_id)
+        return {
+            "status": "accepted",
+            "task_id": task_id,
+            "message": f"Self-Improvement loop started for {req.epic_id}",
+            "repo": exec_path,
+            "github_url": github_url,
+            "issue": issue_number,
+        }
+    raise HTTPException(status_code=500, detail="Backlog database missing")
+
+
 
 # ── SSE & WebSocket Streams ───────────────────────────────────────────────────
 async def _sse_generator():
@@ -349,8 +422,25 @@ def get_scheduler_status():
     state = {"status": "never_run", "last_tick": None, "all_scores": [], "landscape_top": {}}
     path = "/tmp/forgeos_scheduler_state.json"
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            state = json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+                
+            # Detect Stale Scheduler
+            if state.get("last_tick") and state.get("status") == "active":
+                from datetime import datetime
+                # Parse the ISO format string 
+                tick_time = datetime.fromisoformat(state["last_tick"].replace("Z", "+00:00")).replace(tzinfo=None)
+                now = datetime.utcnow()
+                
+                # Assume default interval is 1800 if not injected into state, buffer x2
+                interval = state.get("interval", 1800) 
+                if (now - tick_time).total_seconds() > interval * 2.5:
+                    state["status"] = "stale"
+                    
+        except Exception:
+            pass
+            
     state["process_running"] = _scheduler_is_running()
     return state
 
@@ -506,6 +596,65 @@ def get_task_branches(task_id: str):
             pass
     return {"branches": [], "winner_id": None}
 
+
+# ── Background Task Reaper ────────────────────────────────────────────────────
+async def _task_reaper_loop():
+    """Periodically scans TASK_REGISTRY for tasks that have stalled without terminal states."""
+    from datetime import timezone
+    while True:
+        try:
+            now = datetime.utcnow()
+            for task_id, record in list(TASK_REGISTRY.items()):
+                if record.get("status") == "RUNNING":
+                    hb_str = record.get("heartbeat_at") or record.get("started_at")
+                    if not hb_str:
+                        continue
+                    try:
+                        # parse ISO datetime (replace Z for fromisoformat compatibility in 3.10)
+                        hb_time = datetime.fromisoformat(hb_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                        elapsed = (now - hb_time).total_seconds()
+                        
+                        # Timers based on Epic G Requirements
+                        timeout = 1800 # default 30 mins
+                        if record.get("current_state") == "INIT":
+                            timeout = 60
+                        elif record.get("current_state") == "PLAN":
+                            timeout = 180
+                        elif record.get("current_state") == "BRANCH_RACE":
+                            timeout = 300
+                            
+                        if elapsed > timeout:
+                            record["status"] = "FAILED"
+                            record["current_state"] = "FAILED_STALLED_" + record.get("current_state", "UNKNOWN")
+                            record["terminal_reason"] = "timeout_exceeded"
+                            logs = record.get("logs", [])
+                            stalled_msg = f"Task aborted by Reaper. Stalled in {record.get('current_state')} for > {timeout}s."
+                            logs.append(stalled_msg)
+                            record["logs"] = logs
+                            print(f"[REAPER] Killed {task_id}: {stalled_msg}")
+                            
+                            # Append to physical telemetry log so UI picks it up 
+                            import json
+                            with open("/tmp/forgeos_telemetry.log", "a") as f:
+                                event = {
+                                    "timestamp": now.isoformat() + "Z",
+                                    "event": "task_stalled",
+                                    "issue_id": record.get("issue"),
+                                    "state": record.get("current_state"),
+                                    "message": stalled_msg
+                                }
+                                f.write(json.dumps(event) + "\n")
+                                
+                    except Exception as e:
+                        print(f"[REAPER] Error processing {task_id}: {e}")
+        except Exception as e:
+            print(f"[REAPER] Loop error: {e}")
+            
+        await asyncio.sleep(15)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(_task_reaper_loop())
 
 if __name__ == "__main__":
     import uvicorn
