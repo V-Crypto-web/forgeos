@@ -1,0 +1,1 @@
+1. Check auth.py \n 2. Add empty string check -> return False.

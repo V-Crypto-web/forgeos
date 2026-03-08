@@ -1,0 +1,5 @@
+{"timestamp": 1772901433.5557928, "event_type": "state_transition", "payload": {"state": "INIT", "message": "Initializing execution context."}}
+{"timestamp": 1772901433.5560472, "event_type": "state_transition", "payload": {"state": "FETCH_ISSUE", "message": "Fetching issue details for issue: 101"}}
+{"timestamp": 1772901433.601561, "event_type": "state_transition", "payload": {"state": "FETCH_ISSUE", "message": "Parsing Core Spec and ADRs for context injection."}}
+{"timestamp": 1772901433.6020591, "event_type": "state_transition", "payload": {"state": "PLAN", "message": "Planning task execution.", "traceability_id": "task_from_issue"}}
+{"timestamp": 1772901436.6804988, "event_type": "state_transition", "payload": {"state": "VERIFY", "message": "Failure Taxonomy Engine classified failure as: UNKNOWN"}}

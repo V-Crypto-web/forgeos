@@ -1,0 +1,5 @@
+# ForgeOS Profile for Self-Improvement
+python_version: "3.14"
+install_command: ""
+test_command: ".venv/bin/python3 -c \"import forgeos.observability.telemetry; print('Telemetry test passed.')\""
+test_dir: "forgeos"

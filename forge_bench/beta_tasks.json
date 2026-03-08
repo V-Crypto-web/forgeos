@@ -1,0 +1,37 @@
+[
+    {
+        "id": 101,
+        "repo_name": "requests",
+        "category": "Bug Fix",
+        "title": "Fix unhandled exception in CaseInsensitiveDict",
+        "description": "When passing a non-string key to CaseInsensitiveDict that doesn't have a .lower() method, it throws an unhandled AttributeError instead of KeyError. Please update `requests/structures.py` to handle this explicitly and raise a KeyError for consistency."
+    },
+    {
+        "id": 102,
+        "repo_name": "requests",
+        "category": "Test Generation",
+        "title": "Add tests for Session.rebuild_auth",
+        "description": "The method `Session.rebuild_auth` in `requests/sessions.py` lacks comprehensive unit tests for when a request redirects from HTTP to HTTPS on the same host. Please generate pytest cases to cover this specific transition."
+    },
+    {
+        "id": 103,
+        "repo_name": "starlette",
+        "category": "Bug Fix",
+        "title": "Handle invalid missing header in BackgroundTasks",
+        "description": "If a user attempts to add a background task that relies on an injected dependency that is missing, it currently fails silently. We need `starlette/background.py` to raise a specific ValueError if an expected callable is None."
+    },
+    {
+        "id": 104,
+        "repo_name": "starlette",
+        "category": "Refactor",
+        "title": "Optimize scope extraction in endpoints",
+        "description": "The logic to extract URL path parameters in `starlette/endpoints.py` does a lot of repetitive dictionary lookups on `scope['path_params']`. Refactor it to extract it once and reuse it to improve per-request latency."
+    },
+    {
+        "id": 105,
+        "repo_name": "marshmallow",
+        "category": "Bug Fix",
+        "title": "Fix date deserialization timezone ignoring",
+        "description": "In `marshmallow/fields.py`, when deserializing a DateTime field, if the input string has a timezone offset but the field is instantiated with `tzinfo=None`, it sometimes drops the timezone data instead of rejecting or converting it. Ensure it strictly respects the `tzinfo` parameter."
+    }
+]

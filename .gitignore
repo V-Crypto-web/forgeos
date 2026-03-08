@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+*.pem
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Runtime data (temp files, not source)
+/tmp/
+.forgeos/branches/
+failure_db/
+/run_trace/
+*.log
+forgeos_scheduler*.json
+
+# Editor
+.DS_Store
+.idea/
+*.swp

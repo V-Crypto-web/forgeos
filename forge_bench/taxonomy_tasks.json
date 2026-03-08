@@ -1,0 +1,182 @@
+[
+    {
+        "id": 1000,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "HTTPDigestAuth fails on non-latin credentials",
+        "description": "There was issue reported, which is closed with bad results.\r\n\r\nhttps://github.com/psf/requests/blob/4f6c0187150af09d085c03096504934eb91c7a9e/requests/auth.py#L59-L63\r\n\r\nDon't pass unicode strings in the arguments, but use UTF8 bytes instead.\r\n```\r\nself.session.get(main_url, auth=requests.auth.HTTPDigestAuth(\"\u0421\u0435\u0440\u0433\u0435\u0439_\u041b\u0430\u0441\u0442\u043e\u0447\u043a\u0438\u043d\".encode('UTF-8'), '1234'))\r\n```\r\n\r\n_Originally posted by @D-stefaang in https://github.com/psf/requests/issues/5089#issuecomment-763569911_\r\n\r\nBut this is wrong! When i try to set user 'Ond\u0159ej' with this advice, requests send bad string:\r\n\r\n```\r\nHTTPDigestAuth('Ond\u0159ej'.encode('utf-8'), 'hesl\u00ed\u010dko')\r\n```\r\ncreates header starts with wrong username!\r\n```\r\nDigest username=\"b'Ond\\xc5\\x99ej'\"\r\n```",
+        "github_url": "https://github.com/psf/requests/issues/6102",
+        "original_issue_number": 6102
+    },
+    {
+        "id": 1001,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "Accessing response.content twice removes forgets read error",
+        "description": "I had a hard debugging time today because an error in the response stream is only reported when accessing `response.content` for the first time.\r\n\r\nThis is especially irritating when running code in a debugger.\r\n\r\n## Expected Result\r\n\r\nIf accessing `response.content` the first time raises an exception I would expect that accessing `response.content` again would also raise an exception (ideally the same). \r\n\r\n## Actual Result\r\n\r\nInstead after raising on the first get, getting `response.content` again returns an empty string.\r\n\r\n## Reproduction Steps\r\n\r\nHere is a patch with a new test case for this: [error_replay_test.diff.gz](https://github.com/requests/requests/files/2838360/error_replay_test.diff.gz).\r\n\r\nBasically, it boils down to this:\r\n\r\n```python\r\nimport requests\r\n\r\nresponse = requests.post(\"http://connreset.biz/get/incomplete/chunked\", stream=True)\r\ntry:\r\n    response.content\r\nexcept Exception:\r\n    # Error handling code, may try something else or fall through\r\n    pass\r\n\r\nconten... [truncated]",
+        "github_url": "https://github.com/psf/requests/issues/4965",
+        "original_issue_number": 4965
+    },
+    {
+        "id": 1002,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "Session.verify=False ignored when REQUESTS_CA_BUNDLE environment variable is set",
+        "description": "One would expect that when the caller explicitly asks to make unverified requests, then the `REQUESTS_CA_BUNDLE` environment variable doesn't affect it. The reality is different, however.\r\n\r\n```python\r\nimport os\r\nimport requests\r\n\r\nos.environ['REQUESTS_CA_BUNDLE'] = 'asd.pem'  # Must be an existing file\r\n\r\nr = requests.get('https://self-signed.badssl.com/', verify=False)\r\nprint(r)\r\n# Prints: <Response [200]>\r\n\r\nsession = requests.Session()\r\nsession.verify = False\r\n\r\nr = session.get('https://self-signed.badssl.com/')\r\nprint(r)\r\n# Fails: requests.exceptions.SSLError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed (_ssl.c:749)\r\n```\r\n",
+        "github_url": "https://github.com/psf/requests/issues/3829",
+        "original_issue_number": 3829
+    },
+    {
+        "id": 1003,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "no_proxy env ignored on 302 redirect",
+        "description": "Hello,\n\nI have a weird problem using Requests and proxies.\nI have https_proxy and no_proxy env variable for a domain and it seems the no_proxy is ignored on a HTTP 302 redirect target.\nWhat I do is basically:\n\n```\ns = requests.Session()\nr = s.get(\"https://use-the-proxy.com\")\n```\n\nThe response is 302 Found (Location: https://do-not-use-the-proxy.com) and Requests tries to follow.\nHere the problem: even if do-not-use-the-proxy.com is present in no_proxy, Requests still use the proxy for the request following a 302(the 302 \"target\").\nIf I directly request https://do-not-use-the-proxy.com, the proxy is not used as expected.\n\nThanks,\n## \n\nNico\n",
+        "github_url": "https://github.com/psf/requests/issues/3296",
+        "original_issue_number": 3296
+    },
+    {
+        "id": 1004,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "Strange behavior when setting cookie value to None in the method-level parameter",
+        "description": "After running the following code\n\n```\ns = requests.Session()\ns.cookies.update({'from-my': 'browser'})\nr = s.get('http://httpbin.org/cookies', cookies={'another': 'cookie', 'from-my': None})\nprint r.text\n```\n\nthe output is\n\n```\n{\n  \"cookies\": {\n    \"from-my; another\": \"cookie\"\n  }\n}\n```\n\nI used Python 2.7.6 and requests 2.7.0.\n\nFor more information, please see http://stackoverflow.com/questions/31902510/strange-requests-behavior-when-setting-cookie-value-to-none-in-the-method-level\n",
+        "github_url": "https://github.com/psf/requests/issues/2716",
+        "original_issue_number": 2716
+    },
+    {
+        "id": 1005,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "requests.exceptions.ReadTimeout is not raised when response is chunked",
+        "description": "https://gist.github.com/nickjoyce-wf/c536f2573ef124115f86\n\nWhen a request has a timeout param supplied and the response is chunked but does not return enough data in time, `requests.exceptions.ReadTimeout` should be raised.\n\n``` shell\n$ mkvirtualenv test\n(test)$ pip install requests werkzeug\n(test)$ python server.py\n```\n\nIn another terminal:\n\n``` shell\n$ workon test\n(test)$ python client.py\n```\n\nExpected results:\n\n`requests.exceptions.ReadTimeout` is raised due to response not being sent within the timeout specified by `requests.get`.\n\nActual results:\n\n```\nTraceback (most recent call last):\n  File \"client.py\", line 3, in <module>\n    requests.get('http://127.0.0.1:8000/', timeout=0.5)\n  File \"/Users/nick/.virtualenvs/test/lib/python2.7/site-packages/requests/api.py\", line 65, in get\n    return request('get', url, **kwargs)\n  File \"/Users/nick/.virtualenvs/test/lib/python2.7/site-packages/requests/api.py\", line 49, in request\n    response = session.request(method=method, url=url, **kwar... [truncated]",
+        "github_url": "https://github.com/psf/requests/issues/2392",
+        "original_issue_number": 2392
+    },
+    {
+        "id": 1006,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "Remove ISO-8859-1 charset fallback",
+        "description": "For a long time we've had a fallback value in `response.encoding` of `ISO-8859-1`, because RFC 2616 told us to. RFC 2616 is now obsolete, replaced by RFCs 7230, 7231, 7232, 7233, 7234, and 7235. The authoritative RFC on this issue is RFC 7231, which has this to say:\n\n> The default charset of ISO-8859-1 for text media types has been removed; the default is now whatever the media type definition says.\n\nThe media type definitions for `text/*` are most recently affected by RFC 6657, which has this to say:\n\n> In accordance with option (a) above, registrations for \"text/*\" media types that can transport charset information inside the corresponding payloads (such as \"text/html\" and \"text/xml\") SHOULD NOT specify the use of a \"charset\" parameter, nor any default value, in order to avoid conflicting interpretations should the \"charset\" parameter value and the value specified in the payload disagree.\n\nI checked the registration for `text/html` [here](https://www.iana.org/assignments/media-types/... [truncated]",
+        "github_url": "https://github.com/psf/requests/issues/2086",
+        "original_issue_number": 2086
+    },
+    {
+        "id": 1007,
+        "repo_name": "requests",
+        "repo_url": "https://github.com/psf/requests",
+        "category": "Bug Fix",
+        "title": "Re-order proxy precedence.",
+        "description": "`Session.trust_env = False` turns off the checking of environment variables for options including proxy settings (`*_proxy`). But `urllib` picks up and uses these environment proxy settings anyway. `requests` should pass the `trust_env` setting on to `urllib`. (Although I'm not sure if `urllib` has a similar override.)\n\n(Proxy setting precedence should be sorted out here as well. They way it is now, environment proxy settings will interfere with (rather than be over-ridden by) the `proxies` argument in `Session.request` or `requests.request` calls and the `Session.proxies` config regardless of `trust_env` settings.)\n",
+        "github_url": "https://github.com/psf/requests/issues/2018",
+        "original_issue_number": 2018
+    },
+    {
+        "id": 1008,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "New \"default\" behaviour in Click 8.3.x is broken for negative boolean flags",
+        "description": "The behaviour of `default=...` for flag values changed in Click 8.3.0, as documented in [the release notes](https://click.palletsprojects.com/en/stable/changes/#version-8-3-0). The new behaviour is broken for negative flags, unless I am holding it wrong. Here's a minimal reproducer (put this in `foo.py`):\n\n```python\nimport click\n\n@click.command('foo')\n@click.option('--without-xyz', 'enable_xyz',\n              help=\"Disable xyz\", flag_value=False, default=True, show_default=True)\ndef foo(enable_xyz):\n    print(f'enable_xyz = {enable_xyz}')\n\nfoo()\n```\n\nThe intent here is that we have an argument representing whether `xyz` is enabled, and a flag named `--without-xyz` which defaults to being disabled. Here, \"disabled\" means that the flag is *not* passed, which means the `default=True` value is used to initialize the `enable_xyz` variable. If `--without-xyz` were passed, the `flag_value=False` would be used to initialize `enable_xyz` instead, which makes sense. Or at least, that was the cas... [truncated]",
+        "github_url": "https://github.com/pallets/click/issues/3111",
+        "original_issue_number": 3111
+    },
+    {
+        "id": 1009,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "`pyright --verifytypes` reports incomplete coverage",
+        "description": "I use `pyright --verifytypes` on https://github.com/adamtheturtle/doccmd and with 8.3.0 I get the following errors:\n\n```\nModule name: \"doccmd\"\nPackage directory: \"/Users/adam/Documents/repositories/doccmd/src/doccmd\"\nModule directory: \"/Users/adam/Documents/repositories/doccmd/src/doccmd\"\nPath of py.typed file: \"/Users/adam/Documents/repositories/doccmd/src/doccmd/py.typed\"\n\nPublic modules: 2\n   doccmd\n   doccmd.__main__\n\nSymbols used in public interface:\nclick.core.Command.get_help_option\n  /Users/adam/Documents/repositories/doccmd/.venv/lib/python3.12/site-packages/click/core.py:1044:9 - error: Return type is partially unknown\n    Return type is \"Option | None\"\nclick.core.Option.default\n  /Users/adam/Documents/repositories/doccmd/.venv/lib/python3.12/site-packages/click/core.py:2777:22 - error: Type is missing type annotation and could be inferred differently by type checkers\n    Inferred type is \"tuple[()]\"\n  /Users/adam/Documents/repositories/doccmd/.venv/lib/python3.12/site-packag... [truncated]",
+        "github_url": "https://github.com/pallets/click/issues/3067",
+        "original_issue_number": 3067
+    },
+    {
+        "id": 1010,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "`launch()` cannot locate files with spaces in the name on Windows",
+        "description": "_Related to #2868 but with files and `locate=True`_\n\n## Problem\n\nWhen a Windows program uses `click.launch(some_path, locate=True)` and `some_path` contains spaces, then Windows Explorer opens showing the user's Documents folder and not the specified file.\n\nDispatching the call to `powershell` and not `cmd` seems to fix the problem.\n\n## Reproduction\n\n```pwsh\n# Prepare and enter the virtual environment\nmkdir click-demo\ncd click-demo\npython -m venv --upgrade-deps .venv\n.\\.venv\\Scripts\\activate.ps1\n\n# Check versions\npip -V\n# pip 25.1.1 from X:\\scratch\\click-demo\\.venv\\Lib\\site-packages\\pip (python 3.11)\n\n# Install click\npip install click\n\n# Check environment\npip list\n# Package    Version\n# ---------- -------\n# click      8.2.1\n# colorama   0.4.6\n# pip        25.1.1\n# setuptools 80.9.0\n```\n\n**`click-demo.py`**\n```python\nimport pathlib\nimport subprocess\n\nimport click\n\n# No spaces in this path\nroot_folder = pathlib.Path(\"C:\\\\Users\\\\Public\")\n\n# No spaces in this path\nsucceeding_folder = root_... [truncated]",
+        "github_url": "https://github.com/pallets/click/issues/2994",
+        "original_issue_number": 2994
+    },
+    {
+        "id": 1011,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "backspace and line-wrapping acting strange on Linux",
+        "description": "When running any app using click.prompt on linux, something weird happens with backspace.\n\n### Recording\nThis screen recording shows 2 letters being removed when I hit backspace once, and the prompt being deleted when I backspace the entire line.\n\n![Image](https://github.com/user-attachments/assets/dd505b9f-b412-49e0-aceb-d878cd291552)\n([asciinema link](https://asciinema.org/a/qWORhMIcnEuG3iLtLvm9FwkhY))\n\nThe returned input is also different from the text shown on screen.\n\n### Environment:\n\n- Python version: 3.13.3\n- Click version: 8.2.1\n\n\n### Cause:\n\ntermui contains a workaround for windows where it prints a readline prompt itself. On linux, this confuses readline so things like backspace/ctrl-backspace and line wrapping don't work correctly.\n\nThis can be fixed by letting readline handling the prompt on linux: #2969 ",
+        "github_url": "https://github.com/pallets/click/issues/2968",
+        "original_issue_number": 2968
+    },
+    {
+        "id": 1012,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "Regression: `click.launch()` broken on Windows in version 8.1.8",
+        "description": "<!--\nDescribe how to replicate the bug.\n\nInclude a minimal reproducible example that demonstrates the bug.\nInclude the full traceback if there was an exception.\n-->\n\n`click.launch(\"https://click.palletsprojects.com/en/stable/\")` results in `[WinError 2] The system cannot find the file specified` on Windows due to an incorrect migration from `os.system` to `subprocess.call`. Refer to the official documentation:  \n\n```\nReplacing `os.system()`\n\nsts = os.system(\"mycmd\" + \" myarg\")\n# becomes\nretcode = call(\"mycmd\" + \" myarg\", shell=True)\n```\n\n<!--\nDescribe the expected behavior that should have happened but didn't.\n-->\n\nProposed fix https://github.com/ivankravets/click/commit/fb59f90614094dd1056a62f20634aaec3b990487\n\nEnvironment:\n\n- Python version: 3.x\n- Click version: 8.1.8\n",
+        "github_url": "https://github.com/pallets/click/issues/2868",
+        "original_issue_number": 2868
+    },
+    {
+        "id": 1013,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "`CliRunner` terminates with `io.UnsupportedOperation` when using `faulthandler`",
+        "description": "It looks like the output redirection for `CliRunner` doesn't play nicely with Python's `faulthandler` library, as it terminates prematurely with the following backtrace (slightly modified to hide local filesystem details):\n\n```pytb\nTraceback (most recent call last):\n  File \"$CONDA_PREFIX/lib/python3.11/site-packages/click/testing.py\", line 408, in invoke\n    return_value = cli.main(args=args or (), prog_name=prog_name, **extra)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$CONDA_PREFIX/lib/python3.11/site-packages/click/core.py\", line 1078, in main\n    rv = self.invoke(ctx)\n         ^^^^^^^^^^^^^^^^\n  File \"$CONDA_PREFIX/lib/python3.11/site-packages/click/core.py\", line 1434, in invoke\n    return ctx.invoke(self.callback, **ctx.params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"$CONDA_PREFIX/lib/python3.11/site-packages/click/core.py\", line 783, in invoke\n    return __callback(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n... [truncated]",
+        "github_url": "https://github.com/pallets/click/issues/2865",
+        "original_issue_number": 2865
+    },
+    {
+        "id": 1014,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "Long option completion with = broken",
+        "description": "When using Click shell completion in bash and zsh, long option completion is not working properly when = is used to separate the option from the value (e.g., `command --long-option=value` vs. `command --long-option value`). In zsh, the option being completed is replaced with the incomplete value or matched value, essentially \"gobbling\" up the option. In bash, the option isn't completed at all. I did not test fish.\n\n## Steps to reproduce the issue\n\n1. Create the following script and place it in the bin directory of an activated virtual environment with *click* installed:\n\n```python\n# gobble\n\n#!/usr/bin/env python\nimport click\n\n\n@click.command\n@click.option(\"--color\", type=click.Choice([\"auto\", \"always\", \"never\"]), default=None,\n              help=\"Control colors in output.\")\n@click.option(\"--name\",\n              help=\"Name of something.\")\ndef main(color: str | None, name: str | None) -> None:\n    \"\"\"Test long options.\"\"\"\n    click.echo(f\"{color=}, {name=}\")\n\n\nif __name__ == \"__main__\":\n... [truncated]",
+        "github_url": "https://github.com/pallets/click/issues/2847",
+        "original_issue_number": 2847
+    },
+    {
+        "id": 1015,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "`show_default` as a string isn't used in prompts as the default shown",
+        "description": "The behavior of `click.Option(\"--name\", default=\"default\", show_default=\"show_default\", prompt=True)` is different for the help text and for the prompt.\r\n\r\nHelp: \ud83d\udc4d \r\n```\r\nUsage: foo.py [OPTIONS]\r\n\r\nOptions:\r\n  --name TEXT  [default: (show_default)]\r\n  --help       Show this message and exit.\r\n```\r\n\r\nPrompt: \ud83d\udc4e \r\n```\r\nName [default]:\r\n```\r\n\r\nIdeally, this would also show the `show_default`:\r\n```\r\nName [show_default]:\r\n```\r\n\r\nEnvironment:\r\n\r\n- Python version: 3.11.6\r\n- Click version: 8.1.6\r\n",
+        "github_url": "https://github.com/pallets/click/issues/2836",
+        "original_issue_number": 2836
+    },
+    {
+        "id": 1016,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "No stdout/stderr is captured with `invoke` during tests in combination with structlog",
+        "description": "There seems to be an issue with capturing stdout/stderr when using `structlog` with stdlib `Logger` in tests. \r\nI've raised [an issue](https://github.com/hynek/structlog/issues/686) with `structlog` but they are not convinced the problem originates there since the logs are\u00a0simply passed to the stdlib Logger.\r\n\r\nI've traced this down to the click's `isolation` context manager which seems to replace `sys.stdout`/`sys.stderr` with mocks during testing and my guess would be that this could have something to do with the problem but I'm hoping you may know better.\r\n\r\nI've tried numerous things like explicitly setting a `StreamHandler(sys.stderr)` to the stdlib `basicConfig`, experimented with `mix_stderr` etc. nothing helped. Any ideas how to fix or work around this issue would be most welcome, thank you.\r\n\r\n**An example**\r\n```python\r\n# app.py\r\nimport structlog\r\nimport click\r\n\r\nlogger = structlog.get_logger()\r\nstructlog.configure(logger_factory=structlog.stdlib.LoggerFactory())\r\n\r\n\r\n@click.c... [truncated]",
+        "github_url": "https://github.com/pallets/click/issues/2827",
+        "original_issue_number": 2827
+    },
+    {
+        "id": 1017,
+        "repo_name": "click",
+        "repo_url": "https://github.com/pallets/click",
+        "category": "Bug Fix",
+        "title": "help not resolving automatically",
+        "description": "From the docs: \r\n\r\nThe help parameter is implemented in Click in a very special manner. Unlike regular parameters it\u2019s automatically added by Click for any command and it performs automatic conflict resolution. By default it\u2019s called --help, but this can be changed. If a command itself implements a parameter with the same name, the default help parameter stops accepting it. There is a context setting that can be used to override the names of the help parameters called [help_option_names](https://click.palletsprojects.com/en/stable/api/#click.Context.help_option_names).\r\n\r\nWhat is wrong: \r\nHelp does not automatically resolve if there is an arg or kwarg called help. In the sample the file is called help.py\r\n\r\n``` \r\nimport click\r\n\r\n# This works \r\n@click.command()\r\n@click.argument('helps')\r\ndef this_works(helps):\r\n    print(helps)\r\n\r\n# > python -m help this\r\n# this\r\n\r\n# > python -m help --help\r\n# Usage: help.py [OPTIONS] HELPS\r\n\r\n# Options:\r\n#   --help  Show this message and exit.\r\n\r\n# Thi... [truncated]",
+        "github_url": "https://github.com/pallets/click/issues/2819",
+        "original_issue_number": 2819
+    }
+]

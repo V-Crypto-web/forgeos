@@ -1,0 +1,28 @@
+\n================ requests_issue_6102 ================
+--- PLAN SNIPPET ---\n### Step-by-Step Plan to Resolve the `GITHUB_TOKEN` Issue
+
+#### Step 1: Identify the Source of the Problem
+1. **Review Documentation and Configuration:**
+   - Examine the README and any other setup or configuration documentation in the repository to identify instructions related to `GITHUB_TOKEN` us...\n
+--- PATCH SNIPPET ---\n```diff
+diff --git a/.env.example b/.env.example
+index 1234567..89abcde 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,5 +1,6 @@
+ # Environment Variables
+ GITHUB_TOKEN=your_token_here
++OTHER_VARIABLE=value_here
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index abcdef0..1234567 100644
+--- a/CMa...\n
+--- TESTS (Passed: None, Failed: None, Errors: ) ---
+============================= test session starts ==============================
+platform darwin -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0
+rootdir: /private/tmp/forgeos_workspaces/requests_issue_6102
+plugins: mock-3.15.1, httpbin-2.1.0, cov-7.0.0
+collected 0 items
+
+============================ no tests ran in 0.00s =============================
+

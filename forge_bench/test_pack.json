@@ -1,0 +1,23 @@
+[
+    {
+        "id": 201,
+        "repo_name": "marshmallow",
+        "category": "Tiny Bugfix",
+        "title": "Fix date deserialization timezone ignoring",
+        "description": "In `marshmallow/fields.py`, when deserializing a DateTime field, if the input string has a timezone offset but the field is instantiated with `tzinfo=None`, it sometimes drops the timezone data instead of rejecting or converting it. Ensure it strictly respects the `tzinfo` parameter."
+    },
+    {
+        "id": 202,
+        "repo_name": "requests",
+        "category": "Test Generation",
+        "title": "Add tests for Session.rebuild_auth",
+        "description": "The method `Session.rebuild_auth` in `requests/sessions.py` lacks comprehensive unit tests for when a request redirects from HTTP to HTTPS on the same host. Please generate pytest cases to cover this specific transition."
+    },
+    {
+        "id": 203,
+        "repo_name": "starlette",
+        "category": "Setup-Hostile Repo",
+        "title": "Handle invalid missing header in BackgroundTasks",
+        "description": "If a user attempts to add a background task that relies on an injected dependency that is missing, it currently fails silently. We need `starlette/background.py` to raise a specific ValueError if an expected callable is None."
+    }
+]

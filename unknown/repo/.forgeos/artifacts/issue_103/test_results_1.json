@@ -1,0 +1,7 @@
+{
+  "status": "failed",
+  "output": "============================= test session starts ==============================\nplatform darwin -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0\nrootdir: /Users/vasiliyprachev/Python_Projects/ForgeAI/unknown/repo\nplugins: anyio-4.12.1\ncollected 0 items\n\n============================ no tests ran in 0.01s =============================\n",
+  "errors": "",
+  "returncode": 5,
+  "command": "python3 -m pytest"
+}

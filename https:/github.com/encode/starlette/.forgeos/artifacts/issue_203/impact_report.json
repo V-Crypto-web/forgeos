@@ -1,0 +1,9 @@
+{
+  "touched_files": [
+    "api/auth.py"
+  ],
+  "impact_radius": 1,
+  "risk_score": "high",
+  "verification_scope": "full_regression",
+  "allowed_strategy": "no_rewrite"
+}

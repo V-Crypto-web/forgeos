@@ -1,0 +1,23 @@
+[
+    {
+        "id": "forgeos",
+        "name": "ForgeOS (Self)",
+        "repo_url": "local",
+        "type": "system",
+        "description": "The autonomous engineering operating system."
+    },
+    {
+        "id": "requests",
+        "name": "Requests",
+        "repo_url": "https://github.com/psf/requests.git",
+        "type": "library",
+        "description": "Python HTTP for Humans."
+    },
+    {
+        "id": "starlette",
+        "name": "Starlette",
+        "repo_url": "https://github.com/encode/starlette.git",
+        "type": "framework",
+        "description": "The little ASGI framework that shines."
+    }
+]

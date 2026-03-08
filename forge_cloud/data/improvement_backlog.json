@@ -1,0 +1,74 @@
+[
+    {
+        "id": "epic-49",
+        "title": "Patch Width Control",
+        "description": "Implement hard AST size limiters to prevent Scope Explosion.",
+        "status": "done",
+        "priority": "high",
+        "risk_zone": "green",
+        "impact": "Mitigates 90.9% of Verification Deficits."
+    },
+    {
+        "id": "epic-54",
+        "title": "Project OS Substrate",
+        "description": "Evolve the dashboard into a core OS switching interface.",
+        "status": "done",
+        "priority": "high",
+        "risk_zone": "green",
+        "impact": "Establishes multi-project routing visibility."
+    },
+    {
+        "id": "epic-48",
+        "title": "Symbol Graph Retrieval",
+        "description": "Advanced dependency traversal for Coder Agents.",
+        "status": "todo",
+        "priority": "medium",
+        "risk_zone": "yellow",
+        "impact": "Fixes Retrieval Failures on deeply nested codebases."
+    },
+    {
+        "id": "epic-50",
+        "title": "Adaptive Strategy Policies",
+        "description": "Dynamically adjust State Machine retries using the Failure Miner.",
+        "status": "done",
+        "priority": "medium",
+        "risk_zone": "green",
+        "impact": "Reduces wasted token spend on loop-trapped strategies."
+    },
+    {
+        "id": "epic-55",
+        "title": "Autonomous Development Loop",
+        "description": "Live SSE telemetry and backlog execution triggers.",
+        "status": "done",
+        "priority": "high",
+        "risk_zone": "green",
+        "impact": "Closes the autonomous execution loop for UI-driven self-improvement."
+    },
+    {
+        "id": "epic-56",
+        "title": "Autonomous Scheduler",
+        "description": "Level-B autonomous discovery: scheduler mines failure_db and backlog, scores candidates, and dispatches improvement runs without human input.",
+        "status": "done",
+        "priority": "high",
+        "risk_zone": "green",
+        "impact": "Closes the continuous autonomous development loop."
+    },
+    {
+        "id": "epic-57",
+        "title": "Mission Control UI",
+        "description": "Full observation surface for the autonomous loop: active runs, task pipeline view, scheduler feed, failure intelligence, development metrics.",
+        "status": "todo",
+        "priority": "high",
+        "risk_zone": "green",
+        "impact": "Makes autonomous development observable and governable from the browser."
+    },
+    {
+        "id": "epic-58",
+        "title": "Strategy Branch Racing",
+        "description": "Speculative parallelism: generate 2-3 candidate strategies per issue, run in parallel sandboxes, select winner by score (success + patch_narrowness - cost).",
+        "status": "todo",
+        "priority": "high",
+        "risk_zone": "yellow",
+        "impact": "Increases first-pass success rate and reduces total retry latency."
+    }
+]

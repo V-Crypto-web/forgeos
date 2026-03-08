@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ForgeOS — Mission Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        :root {
+            --accent: #f97316;
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        @keyframes pulse-ring {
+
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1)
+            }
+
+            50% {
+                opacity: .4;
+                transform: scale(1.5)
+            }
+        }
+
+        .pulse {
+            animation: pulse-ring 1.4s ease-in-out infinite;
+        }
+
+        @keyframes slide-in {
+            from {
+                transform: translateX(100%);
+                opacity: 0
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1
+            }
+        }
+
+        .slide-in {
+            animation: slide-in .25s ease-out;
+        }
+
+        .diff-add {
+            background: rgba(34, 197, 94, .08);
+            color: #86efac;
+        }
+
+        .diff-del {
+            background: rgba(239, 68, 68, .08);
+            color: #fca5a5;
+        }
+
+        .diff-hunk {
+            color: #67e8f9;
+        }
+
+        .bar {
+            transition: width .6s ease;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-950 text-white font-sans antialiased min-h-screen flex overflow-hidden">
+    <div id="root" class="w-full flex h-screen"></div>
+
+    <script type="text/babel">
+        // ─── Utils ────────────────────────────────────────────────────────────────────
+        const fmtTime = iso => { try { return new Date(iso).toLocaleTimeString(); } catch { return iso || "—"; } };
+        const fmtTs = ts => { try { return new Date(ts * 1000).toISOString().split("T")[1].split(".")[0]; } catch { return "—"; } };
+        const ago = iso => {
+            if (!iso) return "—";
+            const d = Math.floor((Date.now() - new Date(iso)) / 1000);
+            if (d < 60) return `${d}s ago`;
+            if (d < 3600) return `${Math.floor(d / 60)}m ago`;
+            return `${Math.floor(d / 3600)}h ago`;
+        };
+
+        const ZONE_CLS = {
+            green: "bg-green-500/15 text-green-400 border-green-500/25",
+            yellow: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
+            red: "bg-red-500/15 text-red-400 border-red-500/25"
+        };
+        const STATE_COL = {
+            DONE: "#22c55e", FAILED: "#ef4444", RETRY: "#eab308",
+            PLAN: "#a855f7", PATCH: "#3b82f6", CODE: "#3b82f6",
+            VERIFY: "#06b6d4", RUN_TESTS: "#06b6d4", INIT: "#6b7280"
+        };
+
+        // ─── Mini Components ──────────────────────────────────────────────────────────
+        const Badge = ({ children, color = "gray" }) => {
+            const cls = {
+                green: "bg-green-500/15 text-green-400 border-green-500/25",
+                yellow: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
+                red: "bg-red-500/15 text-red-400 border-red-500/25",
+                blue: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+                orange: "bg-orange-500/15 text-orange-400 border-orange-500/25",
+                gray: "bg-gray-800 text-gray-400 border-gray-700",
+                purple: "bg-purple-500/15 text-purple-400 border-purple-500/25",
+            }[color] || "bg-gray-800 text-gray-400 border-gray-700";
+            return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold border ${cls}`}>{children}</span>;
+        };
+
+        const StatusBadge = ({ status }) => {
+            const map = {
+                RUNNING: { c: "blue", l: "RUNNING" }, DONE: { c: "green", l: "DONE" },
+                FAILED: { c: "red", l: "FAILED" }, todo: { c: "gray", l: "TODO" },
+                in_progress: { c: "blue", l: "IN PROGRESS" }, done: { c: "green", l: "DONE" }
+            };
+            const m = map[status] || { c: "gray", l: status?.toUpperCase() };
+            return (
+                <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-bold border ${{
+                    blue: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+                    green: "bg-green-500/15 text-green-400 border-green-500/25",
+                    red: "bg-red-500/15 text-red-400 border-red-500/25",
+                    gray: "bg-gray-800 text-gray-400 border-gray-700"
+                }[m.c]}`}>
+                    {status === "RUNNING" && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 pulse" />}
+                    {m.l}
+                </span>
+            );
+        };
+
+        const Stat = ({ label, value, sub, color = "white" }) => (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex flex-col">
+                <div className="text-xs text-gray-500 font-semibold uppercase tracking-widest mb-2">{label}</div>
+                <div className={`text-3xl font-bold font-mono tracking-tighter text-${color}-400`}>{value}</div>
+                {sub && <div className="text-xs text-gray-500 mt-2">{sub}</div>}
+            </div>
+        );
+
+        const ScoreBar = ({ score, max = 1 }) => (
+            <div className="flex items-center gap-2 w-full">
+                <div className="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                    <div className="bar h-1.5 rounded-full bg-gradient-to-r from-orange-600 to-orange-400"
+                        style={{ width: `${(score / max) * 100}%` }} />
+                </div>
+                <span className="text-xs font-mono text-gray-400 w-10 text-right">{score.toFixed(3)}</span>
+            </div>
+        );
+
+        const DiffViewer = ({ patch }) => {
+            if (!patch) return <div className="text-gray-600 italic p-6 text-sm">No patch available.</div>;
+            return (
+                <pre className="text-xs font-mono overflow-x-auto p-4 leading-5">
+                    {patch.split("\n").map((line, i) => {
+                        let cls = "";
+                        if (line.startsWith("+") && !line.startsWith("+++")) cls = "diff-add";
+                        else if (line.startsWith("-") && !line.startsWith("---")) cls = "diff-del";
+                        else if (line.startsWith("@@")) cls = "diff-hunk";
+                        return <div key={i} className={cls}>{line}</div>;
+                    })}
+                </pre>
+            );
+        };
+
+        // ─── Task Detail Drawer ────────────────────────────────────────────────────────
+        // ─── Branch Panel ────────────────────────────────────────────────────
+        const BranchPanel = ({ taskId }) => {
+            const [raceData, setRaceData] = React.useState(null);
+            const [loading, setLoading] = React.useState(true);
+
+            React.useEffect(() => {
+                fetch(`/api/v1/tasks/${taskId}/branches`)
+                    .then(r => r.json())
+                    .then(d => { setRaceData(d); setLoading(false); })
+                    .catch(() => setLoading(false));
+            }, [taskId]);
+
+            if (loading) return <div className="p-6 text-gray-500 animate-pulse text-sm">Loading branch data…</div>;
+            const branches = raceData?.branches || [];
+            if (!branches.length) return (
+                <div className="p-6 text-center">
+                    <div className="text-gray-600 text-sm mb-2">No branch race data for this task.</div>
+                    <div className="text-xs text-gray-700">Branch racing activates automatically for eligible tasks (async/integration/retry).</div>
+                </div>
+            );
+
+            const winnerId = raceData?.winner_id;
+            const maxScore = Math.max(...branches.map(b => b.score || 0), 0.0001);
+
+            return (
+                <div className="p-6 space-y-4">
+                    <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-bold">Branch Race Results</h4>
+                        <Badge color="orange">{branches.length} branches competed</Badge>
+                    </div>
+                    {raceData?.winner_strategy && (
+                        <div className="bg-green-500/5 border border-green-500/25 rounded-lg p-3 mb-4">
+                            <div className="text-xs text-green-400 font-semibold uppercase tracking-widest mb-1">Winner Strategy</div>
+                            <div className="font-bold text-white">{raceData.winner_strategy.replace(/_/g, " ")}</div>
+                        </div>
+                    )}
+                    <div className="space-y-3">
+                        {branches.map((b, i) => {
+                            const isWinner = b.branch_id === winnerId;
+                            const sc = b.score || 0;
+                            return (
+                                <div key={i} className={`rounded-xl border p-4 ${isWinner ? "border-green-500/40 bg-green-500/5" : "border-gray-800 bg-gray-900/50"}`}>
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <span className="font-mono text-xs text-gray-500 truncate">{b.branch_id}</span>
+                                        {isWinner && <Badge color="green">WINNER</Badge>}
+                                        {!isWinner && <Badge color="gray">LOSER → learning data</Badge>}
+                                        <Badge color={{ minimal_local_patch: "blue", test_first_patch: "purple", narrow_rewrite: "yellow" }[b.strategy_type] || "gray"}>
+                                            {b.strategy_type?.replace(/_/g, " ")}
+                                        </Badge>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-3 mb-3 text-center">
+                                        {[["Sim", b.sim_approved ? "APPROVED" : "REJECTED", b.sim_approved ? "green" : "red"],
+                                        ["Cost", `$${(b.cost || 0).toFixed(3)}`, "gray"],
+                                        ["Width", `${b.patch_width || 0} file${b.patch_width === 1 ? "" : "s"}`, "gray"]
+                                        ].map(([l, v, c]) => (
+                                            <div key={l} className="bg-gray-950 rounded-lg p-2 border border-gray-800">
+                                                <div className="text-xs text-gray-500 mb-1">{l}</div>
+                                                <div className={`text-xs font-bold text-${c}-400`}>{v}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs text-gray-500 w-10">score</span>
+                                        <ScoreBar score={sc} max={maxScore} />
+                                    </div>
+                                    {b.sim_warning && (
+                                        <div className="mt-2 text-xs text-yellow-400 font-mono bg-yellow-500/5 border border-yellow-500/15 rounded p-2">⚠ {b.sim_warning}</div>
+                                    )}
+                                    {b.error && (
+                                        <div className="mt-2 text-xs text-red-400 font-mono bg-red-500/5 border border-red-500/15 rounded p-2">❌ {b.error}</div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        const TaskDetail = ({ task, onClose }) => {
+            const [sub, setSub] = React.useState("overview");
+            const [arts, setArts] = React.useState(null);
+
+            React.useEffect(() => {
+                if (sub !== "overview" && !arts) {
+                    fetch(`/api/v1/tasks/${task.id}/artifacts`)
+                        .then(r => r.json()).then(setArts).catch(() => { });
+                }
+            }, [sub]);
+
+            const sendAction = action => fetch(`/api/v1/tasks/${task.id}/action`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action })
+            }).catch(console.error);
+
+            return (
+                <div className="fixed inset-0 bg-black/70 z-50 flex items-start justify-end" onClick={onClose}>
+                    <div className="slide-in w-full max-w-3xl h-full bg-gray-900 border-l border-gray-800 flex flex-col shadow-2xl overflow-hidden"
+                        onClick={e => e.stopPropagation()}>
+
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-black shrink-0">
+                            <div>
+                                <div className="flex items-center gap-3 mb-1">
+                                    <StatusBadge status={task.status} />
+                                    <span className="font-mono text-sm text-orange-400">{task.id}</span>
+                                </div>
+                                <div className="text-xs text-gray-500">{task.repo} · Issue #{task.issue}</div>
+                            </div>
+                            <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl">×</button>
+                        </div>
+
+                        {/* Action bar */}
+                        <div className="flex gap-2 px-6 py-3 border-b border-gray-800 bg-gray-950 overflow-x-auto scrollbar-hide shrink-0">
+                            {task.status === "RUNNING" && [
+                                ["Halt", "halt", "red"], ["Force Replan", "force_replan", "yellow"],
+                                ["Retry", "retry", "blue"], ["Escalate Architect", "escalate", "purple"]
+                            ].map(([l, a, c]) => (
+                                <button key={a} onClick={() => sendAction(a)}
+                                    className={`whitespace-nowrap px-3 py-1.5 rounded text-xs font-bold border transition-colors ${{
+                                        red: "bg-red-600/20 text-red-400 border-red-600/30 hover:bg-red-600/40",
+                                        yellow: "bg-yellow-600/20 text-yellow-400 border-yellow-600/30 hover:bg-yellow-600/40",
+                                        blue: "bg-blue-600/20 text-blue-400 border-blue-600/30 hover:bg-blue-600/40",
+                                        purple: "bg-purple-600/20 text-purple-400 border-purple-600/30 hover:bg-purple-600/40"
+                                    }[c]}`}>
+                                    {l}
+                                </button>
+                            ))}
+                            {task.status === "DONE" && !task.pr_url && [["Approve PR", "approve", "green"], ["Reject", "reject", "red"]].map(([l, a, c]) => (
+                                <button key={a} onClick={() => sendAction(a)}
+                                    className={`px-3 py-1.5 rounded text-xs font-bold border transition-colors ${{
+                                        green: "bg-green-600/20 text-green-400 border-green-600/30 hover:bg-green-600/40",
+                                        red: "bg-red-600/20 text-red-400 border-red-600/30 hover:bg-red-600/40"
+                                    }[c]}`}>
+                                    {l}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Sub-tabs */}
+                        <div className="flex border-b border-gray-800 bg-gray-900 shrink-0">
+                            {["overview", "plan", "patch", "verification", "branches"].map(t => (
+                                <button key={t} onClick={() => setSub(t)}
+                                    className={`px-5 py-3 text-xs font-semibold uppercase tracking-widest transition-colors ${sub === t ? "text-orange-400 border-b-2 border-orange-500 bg-black" : "text-gray-500 hover:text-white"}`}>
+                                    {t}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Content */}
+                        <div className="flex-1 overflow-y-auto">
+                            {sub === "overview" && (
+                                <div className="p-6 space-y-4">
+                                    {/* Core fields grid */}
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {[["Task ID", task.id], ["Mode", task.mode?.toUpperCase() || "—"],
+                                        ["Status", task.status], ["State", task.current_state || "—"],
+                                        ["Started", fmtTime(task.started_at)], ["Issue", `#${task.issue}`],
+                                        ["Cost", task.global_cost != null ? `$${Number(task.global_cost).toFixed(4)}` : "—"],
+                                        ["Racing", task.had_race ? "✅ yes" : "—"],
+                                        ].map(([l, v]) => (
+                                            <div key={l} className="bg-gray-950 rounded-lg p-3 border border-gray-800">
+                                                <div className="text-xs text-gray-500 font-semibold uppercase tracking-widest mb-1">{l}</div>
+                                                <div className={`font-mono text-sm break-all ${task.status === "RUNNING" && l === "State" ? "text-orange-400 animate-pulse" : "text-white"}`}>{v}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Repo */}
+                                    <div className="bg-gray-950 rounded-lg p-3 border border-gray-800">
+                                        <div className="text-xs text-gray-500 font-semibold uppercase tracking-widest mb-1">Repository</div>
+                                        <div className="font-mono text-sm text-gray-300 break-all">{task.repo}</div>
+                                    </div>
+
+                                    {/* PR Link */}
+                                    {task.pr_url && (
+                                        <a href={task.pr_url} target="_blank" rel="noopener noreferrer"
+                                            className="block bg-green-600/10 border border-green-600/30 rounded-lg p-4 text-green-400 font-semibold hover:bg-green-600/20 transition-colors text-sm">
+                                            🔗 Open Pull Request →
+                                        </a>
+                                    )}
+
+                                    {/* Live engine logs */}
+                                    {task.logs && task.logs.length > 0 && (
+                                        <div className="bg-gray-950 rounded-lg border border-gray-800 overflow-hidden">
+                                            <div className="px-4 py-2 bg-black border-b border-gray-800 flex items-center justify-between">
+                                                <span className="text-xs text-gray-500 font-semibold uppercase tracking-widest">Engine Log</span>
+                                                {task.status === "RUNNING" && <span className="text-xs text-orange-400 animate-pulse">● live</span>}
+                                            </div>
+                                            <div className="p-3 max-h-64 overflow-y-auto space-y-0.5">
+                                                {task.logs.slice(-30).map((line, i) => (
+                                                    <div key={i} className={`font-mono text-xs leading-5 ${line.includes("ERROR") || line.includes("FAIL") ? "text-red-400" :
+                                                            line.includes("BRANCH_RACE") || line.includes("Winner") ? "text-orange-400" :
+                                                                line.includes("DONE") || line.includes("approved") ? "text-green-400" : "text-gray-400"
+                                                        }`}>{line}</div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Inline plan preview */}
+                                    {task.plan && (
+                                        <div className="bg-gray-950 rounded-lg border border-gray-800 overflow-hidden">
+                                            <div className="px-4 py-2 bg-black border-b border-gray-800">
+                                                <span className="text-xs text-gray-500 font-semibold uppercase tracking-widest">Plan Preview</span>
+                                            </div>
+                                            <pre className="p-4 text-xs text-gray-300 whitespace-pre-wrap font-mono leading-5 max-h-48 overflow-y-auto">{task.plan?.slice(0, 1200)}{task.plan?.length > 1200 ? "…" : ""}</pre>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {sub === "plan" && (
+                                <div className="p-6">
+                                    {!arts ? <div className="text-gray-500 animate-pulse text-sm">Loading…</div>
+                                        : arts.plan ? <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono leading-6">{arts.plan}</pre>
+                                            : <div className="text-gray-600 italic text-sm">No plan artifact.</div>}
+                                </div>
+                            )}
+                            {sub === "patch" && (
+                                <div className="bg-black min-h-full">
+                                    {!arts ? <div className="text-gray-500 animate-pulse p-6 text-sm">Loading…</div>
+                                        : <DiffViewer patch={arts.patch} />}
+                                </div>
+                            )}
+                            {sub === "verification" && (
+                                <div className="p-6">
+                                    {!arts ? <div className="text-gray-500 animate-pulse text-sm">Loading…</div>
+                                        : arts.test_results
+                                            ? <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-5">
+                                                {typeof arts.test_results === "string" ? arts.test_results : JSON.stringify(JSON.parse(arts.test_results), null, 2)}
+                                            </pre>
+                                            : <div className="text-gray-600 italic text-sm">No test results.</div>}
+                                </div>
+                            )}
+                            {sub === "branches" && (
+                                <BranchPanel taskId={task.id} />
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // ─── Scheduler Toggle ─────────────────────────────────────────────
+        const SchedulerToggle = ({ running }) => {
+            const [busy, setBusy] = React.useState(false);
+            const [msg, setMsg] = React.useState("");
+
+            const toggle = async () => {
+                setBusy(true);
+                setMsg("");
+                const url = running ? "/api/v1/scheduler/stop" : "/api/v1/scheduler/start?interval=1800";
+                try {
+                    const res = await fetch(url, { method: "POST" });
+                    const d = await res.json();
+                    setMsg(d.message || (d.ok ? "OK" : "Error"));
+                } catch (e) {
+                    setMsg("Request failed");
+                } finally {
+                    setBusy(false);
+                    setTimeout(() => setMsg(""), 4000);
+                }
+            };
+
+            return (
+                <div className="flex items-center gap-2">
+                    {msg && <span className="text-xs text-gray-400 animate-fade-in">{msg}</span>}
+                    <button
+                        onClick={toggle}
+                        disabled={busy}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-all disabled:opacity-50 ${running
+                            ? "bg-green-500/10 border border-green-500/30 text-green-400 hover:bg-green-500/20"
+                            : "bg-orange-500/10 border border-orange-500/30 text-orange-400 hover:bg-orange-500/20"
+                            }`}>
+                        {busy ? "…" : running ? "⏹ Stop" : "▶ Start Scheduler"}
+                    </button>
+                </div>
+            );
+        };
+
+        // ─── Mission Control Panel ─────────────────────────────────────────────────────
+
+        const MissionControl = ({ tasks, scheduler }) => {
+            const [selTask, setSelTask] = React.useState(null);
+            const [filter, setFilter] = React.useState("all");
+            const [racingMetrics, setRacingMetrics] = React.useState(null);
+
+            const running = tasks.filter(t => t.status === "RUNNING");
+            const done = tasks.filter(t => t.status === "DONE");
+            const failed = tasks.filter(t => t.status === "FAILED");
+            const filtered = filter === "all" ? tasks : tasks.filter(t => t.status === filter.toUpperCase() || t.status === filter);
+            const schedulerOk = scheduler?.process_running || (scheduler?.status && scheduler.status !== "never_run");
+            const schedulerSleeping = scheduler?.process_running && scheduler?.status === "blocked_active_task";
+
+            React.useEffect(() => {
+                const poll = () =>
+                    fetch("/api/v1/metrics/racing").then(r => r.json()).then(setRacingMetrics).catch(() => { });
+                poll();
+                const id = setInterval(poll, 5000);
+                return () => clearInterval(id);
+            }, []);
+
+            const topStrategy = racingMetrics?.winner_strategy_distribution
+                ? Object.entries(racingMetrics.winner_strategy_distribution).sort((a, b) => b[1] - a[1])[0]
+                : null;
+
+            return (
+                <div className="flex flex-col gap-6 p-6 overflow-y-auto h-full max-w-7xl mx-auto w-full">
+
+                    {/* Row 1: Core KPI bar */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <Stat label="Active Runs" value={running.length} color="blue"
+                            sub={running.map(t => t.current_state).join(", ") || "—"} />
+                        <Stat label="Completed" value={done.length} color="green"
+                            sub={`${tasks.length > 0 ? Math.round(done.length / tasks.length * 100) : 0}% yield`} />
+                        <Stat label="Failed" value={failed.length} color="red"
+                            sub="check failure intelligence" />
+                        <Stat label="Scheduler" value={schedulerOk ? "ACTIVE" : "IDLE"} color={schedulerOk ? "orange" : "gray"}
+                            sub={scheduler?.last_tick ? `Last tick ${ago(scheduler.last_tick)}` : "Never ran"} />
+                    </div>
+
+                    {/* Row 2: Branch Racing KPI bar */}
+                    <div>
+                        <div className="flex items-center gap-2 mb-3">
+                            <span className="text-xs font-semibold uppercase tracking-widest text-gray-500">Branch Racing</span>
+                            <span className="h-px flex-1 bg-gray-800" />
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <Stat label="Races Run" value={racingMetrics?.races_total ?? "—"} color="orange"
+                                sub={racingMetrics ? `${racingMetrics.races_with_winner} with winner` : "no data yet"} />
+                            <Stat label="Win Rate"
+                                value={racingMetrics?.win_rate != null ? `${Math.round(racingMetrics.win_rate * 100)}%` : "—"}
+                                color="green"
+                                sub={racingMetrics ? `${racingMetrics.avg_branches_per_race} branches avg` : "—"} />
+                            <Stat label="Top Strategy"
+                                value={topStrategy ? topStrategy[0].replace(/_/g, " ").split(" ")[0] : "—"}
+                                color="purple"
+                                sub={topStrategy ? `${topStrategy[1]}× wins — ${topStrategy[0].replace(/_/g, " ")}` : "no races yet"} />
+                            <Stat label="Avg Race Cost"
+                                value={racingMetrics?.avg_race_cost != null ? `$${racingMetrics.avg_race_cost.toFixed(3)}` : "—"}
+                                color="yellow"
+                                sub={racingMetrics ? `${racingMetrics.races_no_winner} races no winner` : "—"} />
+                        </div>
+                    </div>
+
+                    {/* Row 3: Linear vs Racing comparison */}
+                    {racingMetrics && (
+                        <div>
+                            <div className="flex items-center gap-2 mb-3">
+                                <span className="text-xs font-semibold uppercase tracking-widest text-gray-500">Linear vs Racing</span>
+                                <span className="h-px flex-1 bg-gray-800" />
+                            </div>
+                            <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                                <div className="grid grid-cols-3 border-b border-gray-800">
+                                    <div className="px-5 py-3 text-xs font-semibold uppercase tracking-widest text-gray-500 bg-black">Metric</div>
+                                    <div className="px-5 py-3 text-xs font-semibold uppercase tracking-widest text-gray-400 bg-black border-l border-gray-800">Linear</div>
+                                    <div className="px-5 py-3 text-xs font-semibold uppercase tracking-widest text-orange-400 bg-black border-l border-gray-800">Racing ⚡</div>
+                                </div>
+                                {[
+                                    ["Total Tasks", racingMetrics.linear.tasks, racingMetrics.racing.tasks, "—"],
+                                    ["Completed", racingMetrics.linear.done, racingMetrics.racing.done, "—"],
+                                    ["Failed", racingMetrics.linear.failed, racingMetrics.racing.failed, "lower = better"],
+                                    ["Success Rate",
+                                        `${Math.round((racingMetrics.linear.success_rate || 0) * 100)}%`,
+                                        `${Math.round((racingMetrics.racing.success_rate || 0) * 100)}%`,
+                                        "higher = better"],
+                                    ["Races Total", "—", racingMetrics.races_total, `${racingMetrics.win_rate * 100 | 0}% win rate`],
+                                ].map(([label, lin, race, note]) => {
+                                    const linN = parseFloat(lin);
+                                    const raceN = parseFloat(race);
+                                    const raceBetter = !isNaN(linN) && !isNaN(raceN) && raceN > linN;
+                                    const raceWorse = !isNaN(linN) && !isNaN(raceN) && raceN < linN && label === "Failed";
+                                    return (
+                                        <div key={label} className="grid grid-cols-3 border-b border-gray-800 last:border-0 hover:bg-gray-800/30 transition-colors">
+                                            <div className="px-5 py-3 text-sm text-gray-400">
+                                                <div>{label}</div>
+                                                {note && <div className="text-xs text-gray-600">{note}</div>}
+                                            </div>
+                                            <div className="px-5 py-3 font-mono text-sm text-gray-300 border-l border-gray-800">{lin}</div>
+                                            <div className={`px-5 py-3 font-mono text-sm border-l border-gray-800 font-bold ${raceBetter ? "text-green-400" : raceWorse ? "text-green-400" : "text-gray-300"}`}>
+                                                {race}
+                                                {raceBetter && <span className="ml-1 text-xs text-green-500">↑</span>}
+                                                {raceWorse && <span className="ml-1 text-xs text-green-500">↓</span>}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                        {/* Scheduler Panel */}
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                            <div className="px-5 py-3 border-b border-gray-800 bg-black flex items-center justify-between">
+                                <h3 className="font-bold text-sm flex items-center gap-2">
+                                    <span className={`w-2 h-2 rounded-full ${scheduler?.process_running ? "bg-orange-400 pulse" : "bg-gray-600"}`} />
+                                    Autonomous Scheduler
+                                </h3>
+                                <div className="flex items-center gap-3">
+                                    <span className="text-xs text-gray-500 font-mono">{scheduler?.last_tick ? `${ago(scheduler.last_tick)}` : "—"}</span>
+                                    <SchedulerToggle running={scheduler?.process_running} />
+                                </div>
+                            </div>
+
+                            {schedulerOk ? (
+                                <div className="p-4 space-y-4">
+                                    {/* Selected */}
+                                    <div className="bg-orange-500/5 border border-orange-500/20 rounded-lg p-3">
+                                        <div className="text-xs text-orange-400 font-semibold uppercase tracking-widest mb-1">Selected</div>
+                                        <div className="font-bold text-white">{scheduler.selected?.title}</div>
+                                        <div className="flex items-center gap-2 mt-2">
+                                            <span className="font-mono text-xs text-gray-500">{scheduler.selected?.id}</span>
+                                            <span className="text-xs text-orange-400 font-mono ml-auto">score {scheduler.selected?.score?.toFixed(4)}</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Status badge */}
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs text-gray-500">Last outcome:</span>
+                                        <Badge color={{ dispatched: "green", blocked_active_task: "yellow", dispatch_failed: "red", idle: "gray" }[scheduler.status] || "gray"}>
+                                            {scheduler.status?.replace(/_/g, " ").toUpperCase()}
+                                        </Badge>
+                                        {scheduler.active_count > 0 && (
+                                            <span className="text-xs text-gray-500">{scheduler.active_count} task(s) already running</span>
+                                        )}
+                                    </div>
+
+                                    {/* Scoring table */}
+                                    <div>
+                                        <div className="text-xs text-gray-500 font-semibold uppercase tracking-widest mb-2">Candidate Scores</div>
+                                        <div className="space-y-2">
+                                            {(scheduler.all_scores || []).map((row, i) => (
+                                                <div key={i} className={`rounded-lg p-2.5 border ${i === 0 ? "bg-orange-500/5 border-orange-500/20" : "bg-gray-950 border-gray-800"}`}>
+                                                    <div className="flex items-center gap-2 mb-1.5">
+                                                        <span className="font-mono text-xs text-gray-500">{row.id}</span>
+                                                        {row.risk_zone && <Badge color={{ green: "green", yellow: "yellow", red: "red" }[row.risk_zone]}>{row.risk_zone}</Badge>}
+                                                        {i === 0 && <Badge color="orange">WINNER</Badge>}
+                                                    </div>
+                                                    <div className="text-sm text-white mb-1.5">{row.title}</div>
+                                                    <ScoreBar score={row.score} max={1} />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="p-6 text-center text-gray-600 text-sm">
+                                    No scheduler data yet. Run:<br />
+                                    <code className="text-xs text-gray-500 mt-2 block font-mono">python3 forge_cloud/autonomous_scheduler.py --once</code>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Failure Intelligence */}
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                            <div className="px-5 py-3 border-b border-gray-800 bg-black flex items-center justify-between">
+                                <h3 className="font-bold text-sm">Failure Intelligence</h3>
+                                <span className="text-xs text-gray-500">{scheduler?.total_failures || 0} records</span>
+                            </div>
+                            <div className="p-4">
+                                {Object.keys(scheduler?.landscape_top || {}).length > 0 ? (
+                                    <div className="space-y-2">
+                                        {Object.entries(scheduler.landscape_top).map(([sig, count], i) => {
+                                            const max = Math.max(...Object.values(scheduler.landscape_top));
+                                            const pct = Math.round((count / max) * 100);
+                                            const hue = count >= 3 ? "red" : count >= 2 ? "yellow" : "blue";
+                                            return (
+                                                <div key={i} className="flex items-center gap-3">
+                                                    <span className="text-xs font-mono text-gray-400 w-48 truncate shrink-0">{sig.replace(/_/g, " ")}</span>
+                                                    <div className="flex-1 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                                                        <div className={`bar h-1.5 rounded-full ${{ red: "bg-red-500", yellow: "bg-yellow-500", blue: "bg-blue-500" }[hue]}`}
+                                                            style={{ width: `${pct}%` }} />
+                                                    </div>
+                                                    <span className={`text-xs font-mono w-4 text-right ${{ red: "text-red-400", yellow: "text-yellow-400", blue: "text-blue-400" }[hue]}`}>{count}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="text-gray-600 italic text-sm">No failure data yet.</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Row 3: Active Development */}
+                    {running.length > 0 && (
+                        <div>
+                            <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-3">Active Development</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {running.map(t => (
+                                    <button key={t.id} onClick={() => setSelTask(t)}
+                                        className="bg-gray-900 border border-blue-500/30 rounded-xl p-4 text-left hover:border-blue-400/60 transition-colors group">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <span className="w-2 h-2 rounded-full bg-blue-400 pulse shrink-0" />
+                                            <span className="font-mono text-xs text-blue-400 truncate">{t.id}</span>
+                                        </div>
+                                        <div className="text-sm text-white font-semibold mb-1">Issue #{t.issue}</div>
+                                        <div className="text-xs text-gray-500 truncate mb-3">{t.repo}</div>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="w-2 h-2 rounded-full shrink-0"
+                                                    style={{ background: STATE_COL[t.current_state] || "#6b7280" }} />
+                                                <span className="text-xs font-mono text-gray-400">{t.current_state}</span>
+                                            </div>
+                                            <Badge color={{ supervised: "orange", safe: "green", restricted: "yellow" }[t.mode] || "gray"}>{t.mode}</Badge>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Row 4: Task Registry */}
+                    <div>
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-500">Task Registry</h3>
+                            <div className="flex gap-1">
+                                {["all", "RUNNING", "DONE", "FAILED"].map(f => (
+                                    <button key={f} onClick={() => setFilter(f)}
+                                        className={`px-3 py-1 rounded text-xs font-semibold transition-colors ${filter === f ? "bg-gray-700 text-white" : "text-gray-500 hover:text-white"}`}>
+                                        {f}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {filtered.length === 0 ? (
+                            <div className="text-center text-gray-700 py-10 text-sm">No runs yet. Dispatch an issue or run the scheduler.</div>
+                        ) : (
+                            <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-black text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
+                                        <tr>
+                                            {["Task ID", "Issue", "Mode", "Status", "State", "Started", "Actions"].map(h => (
+                                                <th key={h} className="px-4 py-3 text-left font-semibold">{h}</th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-800">
+                                        {filtered.map(t => (
+                                            <tr key={t.id} className="hover:bg-gray-800/50 transition-colors">
+                                                <td className="px-4 py-3 font-mono text-xs text-orange-400 cursor-pointer hover:text-orange-300"
+                                                    onClick={() => setSelTask(t)}>{t.id}</td>
+                                                <td className="px-4 py-3 font-mono text-gray-300 text-xs">#{t.issue}</td>
+                                                <td className="px-4 py-3">
+                                                    <Badge color={{ supervised: "orange", safe: "green", restricted: "yellow" }[t.mode] || "gray"}>{t.mode}</Badge>
+                                                </td>
+                                                <td className="px-4 py-3"><StatusBadge status={t.status} /></td>
+                                                <td className="px-4 py-3">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="w-2 h-2 rounded-full shrink-0"
+                                                            style={{ background: STATE_COL[t.current_state] || "#6b7280" }} />
+                                                        <span className="text-xs font-mono text-gray-400">{t.current_state}</span>
+                                                    </div>
+                                                </td>
+                                                <td className="px-4 py-3 text-xs text-gray-500 font-mono">{fmtTime(t.started_at)}</td>
+                                                <td className="px-4 py-3">
+                                                    <button onClick={() => setSelTask(t)}
+                                                        className="px-2 py-1 text-xs text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 rounded transition-colors">
+                                                        Inspect →
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+
+                    {selTask && <TaskDetail task={selTask} onClose={() => setSelTask(null)} />}
+                </div>
+            );
+        };
+
+        // ─── Main App ──────────────────────────────────────────────────────────────────
+        function App() {
+            const [activeTab, setActiveTab] = React.useState("mission");
+            const [projects, setProjects] = React.useState([]);
+            const [activeProject, setActiveProject] = React.useState(null);
+            const [backlog, setBacklog] = React.useState([]);
+            const [omnibench, setOmnibench] = React.useState("Loading…");
+            const [logs, setLogs] = React.useState([]);
+            const [wsConn, setWsConn] = React.useState(false);
+            const [timeline, setTimeline] = React.useState([]);
+            const [tasks, setTasks] = React.useState([]);
+            const [scheduler, setScheduler] = React.useState({});
+            const [totalCost, setTotalCost] = React.useState(0);
+            const [selTask, setSelTask] = React.useState(null);
+            const logsEndRef = React.useRef(null);
+
+            // Run Issue form
+            const [runForm, setRunForm] = React.useState({ repo_path: "", issue_number: "", mode: "supervised" });
+            const [runState, setRunState] = React.useState({ loading: false, msg: null, ok: false });
+
+            // Bootstrap data
+            React.useEffect(() => {
+                fetch("/api/v1/projects").then(r => r.json()).then(d => {
+                    setProjects(d);
+                    if (d.length > 0) {
+                        setActiveProject(d[0]);
+                        setRunForm(f => ({ ...f, repo_path: d[0].repo_url || "" }));
+                    }
+                }).catch(() => { });
+                fetch("/api/v1/backlog").then(r => r.json()).then(setBacklog).catch(() => { });
+                fetch("/api/v1/omnibench").then(r => r.json()).then(d => setOmnibench(d.baseline_yaml)).catch(() => { });
+            }, []);
+
+            // Poll tasks + scheduler state every 3s
+            React.useEffect(() => {
+                const poll = () => {
+                    fetch("/api/v1/tasks").then(r => r.json()).then(setTasks).catch(() => { });
+                    fetch("/api/v1/scheduler/status").then(r => r.json()).then(setScheduler).catch(() => { });
+                };
+                poll();
+                const id = setInterval(poll, 3000);
+                return () => clearInterval(id);
+            }, []);
+
+            // WebSocket telemetry — pre-load history first, then live tail
+            React.useEffect(() => {
+                // 1. Load existing history immediately (last 200 events)
+                fetch("/api/v1/telemetry/history?n=200")
+                    .then(r => r.json())
+                    .then(lines => {
+                        setLogs(lines);
+                        // Also populate timeline from history
+                        const transitions = lines.flatMap(raw => {
+                            try {
+                                const p = JSON.parse(raw);
+                                return p.event_type === "state_transition" ? [p] : [];
+                            } catch { return []; }
+                        });
+                        if (transitions.length > 0) setTimeline(transitions);
+                    })
+                    .catch(() => { });
+
+                // 2. Live WebSocket tail for new events
+                const ws = new WebSocket("ws://localhost:8081/api/v1/logs/stream");
+                ws.onopen = () => setWsConn(true);
+                ws.onmessage = e => {
+                    setLogs(prev => [...prev, e.data].slice(-500)); // keep last 500
+                    try {
+                        const p = JSON.parse(e.data);
+                        if (p.metadata?.cost) setTotalCost(prev => prev + p.metadata.cost);
+                        if (p.event_type === "state_transition") {
+                            setTimeline(prev => {
+                                if (prev.length > 0 && prev[prev.length - 1].timestamp === p.timestamp) return prev;
+                                return [...prev, p];
+                            });
+                        }
+                    } catch { }
+                };
+                ws.onclose = () => setWsConn(false);
+                return () => ws.close();
+            }, []);
+
+
+            // SSE Timeline
+            React.useEffect(() => {
+                const sse = new EventSource("/api/v1/engine/stream");
+                sse.onmessage = e => {
+                    try {
+                        const p = JSON.parse(e.data);
+                        if (p.event_type === "state_transition") {
+                            setTimeline(prev => {
+                                if (prev.length > 0 && prev[prev.length - 1].timestamp === p.timestamp) return prev;
+                                return [...prev, p];
+                            });
+                        }
+                    } catch { }
+                };
+                return () => sse.close();
+            }, []);
+
+            React.useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [logs]);
+
+            // Run issue submit
+            const handleRun = async () => {
+                if (!runForm.repo_path || !runForm.issue_number) return;
+                setRunState({ loading: true, msg: null, ok: false });
+                try {
+                    const res = await fetch("/api/v1/issues/run", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ repo_path: runForm.repo_path, issue_number: parseInt(runForm.issue_number), mode: runForm.mode })
+                    });
+                    const d = await res.json();
+                    setRunState({ loading: false, msg: `Dispatched → ${d.id}`, ok: true });
+                    setTimeout(() => setActiveTab("mission"), 1000);
+                } catch (e) {
+                    setRunState({ loading: false, msg: `Error: ${e.message}`, ok: false });
+                }
+            };
+
+            if (!activeProject) return (
+                <div className="flex items-center justify-center w-full h-full text-gray-600 text-sm">
+                    Connecting to ForgeOS substrate…
+                </div>
+            );
+
+            const isSystem = activeProject.id === "forgeos";
+
+            const TABS = [
+                { id: "mission", label: "🎛 Mission Control", color: "orange" },
+                { id: "run", label: "▶ Run Issue", color: "blue" },
+                { id: "timeline", label: "⏱ Live Timeline", color: "green" },
+                ...(isSystem ? [
+                    { id: "backlog", label: "🧠 Roadmap", color: "yellow" },
+                    { id: "omnibench", label: "🔬 OmniBench", color: "rose" },
+                ] : []),
+                { id: "telemetry", label: "📡 Telemetry", color: "gray" },
+            ];
+
+            const ACCENT = {
+                orange: "text-orange-400 border-orange-500", blue: "text-blue-400 border-blue-500",
+                green: "text-green-400 border-green-500", yellow: "text-yellow-400 border-yellow-500",
+                rose: "text-rose-400 border-rose-500", gray: "text-white border-white"
+            };
+
+            return (
+                <div className="flex w-full h-full">
+
+                    {/* Sidebar */}
+                    <div className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0 z-20 shadow-2xl overflow-y-auto scrollbar-hide">
+                        <div className="p-4 border-b border-gray-800 flex items-center gap-3 bg-black">
+                            <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center font-bold text-sm shadow-lg">F</div>
+                            <div>
+                                <div className="text-sm font-bold">ForgeOS</div>
+                                <div className="text-xs text-gray-500">Mission Control</div>
+                            </div>
+                        </div>
+
+                        <div className="p-3 flex-1 space-y-4">
+                            <div>
+                                <div className="text-xs text-gray-600 uppercase tracking-widest font-semibold mb-2 px-1">System</div>
+                                {projects.filter(p => p.type === "system").map(p => (
+                                    <button key={p.id} onClick={() => { setActiveProject(p); setActiveTab("mission"); }}
+                                        className={`w-full px-3 py-2 rounded-lg mb-1 flex items-center gap-2 text-left transition-colors ${activeProject.id === p.id ? "bg-orange-500/20 text-orange-400 border border-orange-500/40" : "hover:bg-gray-800 text-gray-400"}`}>
+                                        <div className={`w-2 h-2 rounded-full shrink-0 ${activeProject.id === p.id ? "bg-orange-400" : "bg-gray-600"}`} />
+                                        <span className="text-xs font-semibold truncate">{p.name}</span>
+                                    </button>
+                                ))}
+                            </div>
+                            <div>
+                                <div className="text-xs text-gray-600 uppercase tracking-widest font-semibold mb-2 px-1">Repos</div>
+                                {projects.filter(p => p.type !== "system").map(p => (
+                                    <button key={p.id} onClick={() => { setActiveProject(p); setRunForm(f => ({ ...f, repo_path: p.repo_url || "" })); setActiveTab("run"); }}
+                                        className={`w-full px-3 py-2 rounded-lg mb-1 flex items-center gap-2 text-left transition-colors ${activeProject.id === p.id ? "bg-blue-500/20 text-blue-400 border border-blue-500/40" : "hover:bg-gray-800 text-gray-400"}`}>
+                                        <div className={`w-2 h-2 rounded-full shrink-0 ${activeProject.id === p.id ? "bg-blue-400" : "bg-gray-600"}`} />
+                                        <span className="text-xs font-semibold truncate">{p.name}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="p-3 border-t border-gray-800 flex justify-between text-xs text-gray-600">
+                            <span>Engine</span>
+                            <span className={wsConn ? "text-green-500" : "text-red-500"}>{wsConn ? "LIVE" : "OFFLINE"}</span>
+                        </div>
+                    </div>
+
+                    {/* Main */}
+                    <div className="flex-1 flex flex-col bg-black overflow-hidden">
+
+                        {/* Header */}
+                        <header className="h-12 flex items-center justify-between px-5 border-b border-gray-800 bg-gray-900/60 backdrop-blur shrink-0">
+                            <div className="flex items-center gap-3">
+                                <span className={isSystem ? "text-orange-400 font-semibold text-sm" : "text-blue-400 font-semibold text-sm"}>{activeProject.name}</span>
+                                <span className="text-gray-600 text-xs hidden md:inline">{activeProject.description}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-gray-500">
+                                <span className="font-mono hidden lg:inline truncate max-w-xs">{activeProject.repo_url}</span>
+                                <Badge color="gray">{activeProject.type}</Badge>
+                            </div>
+                        </header>
+
+                        {/* Tab bar */}
+                        <div className="flex bg-gray-900 border-b border-gray-800 overflow-x-auto scrollbar-hide shrink-0">
+                            {TABS.map(({ id, label, color }) => (
+                                <button key={id} onClick={() => setActiveTab(id)}
+                                    className={`px-5 py-3 text-xs font-semibold transition-colors whitespace-nowrap ${activeTab === id ? `bg-black border-b-2 ${ACCENT[color]}` : "text-gray-500 hover:text-white"}`}>
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Viewport */}
+                        <div className="flex-1 relative overflow-hidden">
+
+                            {/* Mission Control */}
+                            <div className={`absolute inset-0 overflow-y-auto ${activeTab === "mission" ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"}`}>
+                                <MissionControl tasks={tasks} scheduler={scheduler} />
+                            </div>
+
+                            {/* Run Issue */}
+                            <div className={`absolute inset-0 overflow-y-auto p-8 ${activeTab === "run" ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"}`}>
+                                <div className="max-w-xl mx-auto">
+                                    <h2 className="text-2xl font-bold mb-1">Run Issue</h2>
+                                    <p className="text-gray-500 text-sm mb-8">Dispatch a new engine run.</p>
+                                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-5 shadow-2xl">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Project</label>
+                                            <select value={activeProject.id}
+                                                onChange={e => { const p = projects.find(x => x.id === e.target.value); if (p) { setActiveProject(p); setRunForm(f => ({ ...f, repo_path: p.repo_url || "" })); } }}
+                                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-orange-500">
+                                                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Repo Path / URL</label>
+                                            <input type="text" value={runForm.repo_path} placeholder="/path/to/repo"
+                                                onChange={e => setRunForm(f => ({ ...f, repo_path: e.target.value }))}
+                                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-orange-500 placeholder-gray-700" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Issue Number</label>
+                                            <input type="number" value={runForm.issue_number} placeholder="42"
+                                                onChange={e => setRunForm(f => ({ ...f, issue_number: e.target.value }))}
+                                                className="w-full bg-gray-950 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-orange-500 placeholder-gray-700" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Mode</label>
+                                            <div className="flex rounded-lg border border-gray-700 overflow-hidden">
+                                                {["supervised", "safe", "restricted"].map(m => (
+                                                    <button key={m} onClick={() => setRunForm(f => ({ ...f, mode: m }))}
+                                                        className={`flex-1 py-2.5 text-sm font-semibold capitalize transition-colors ${runForm.mode === m ? "bg-orange-600 text-white" : "bg-gray-950 text-gray-500 hover:text-white"}`}>
+                                                        {m}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <button onClick={handleRun} disabled={runState.loading || !runForm.repo_path || !runForm.issue_number}
+                                            className="w-full py-3 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-800 disabled:text-gray-600 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2">
+                                            {runState.loading ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Dispatching…</> : "▶ Run Issue"}
+                                        </button>
+                                        {runState.msg && (
+                                            <div className={`rounded-lg p-3 text-sm font-mono ${runState.ok ? "bg-green-500/10 text-green-400 border border-green-500/25" : "bg-red-500/10 text-red-400 border border-red-500/25"}`}>
+                                                {runState.msg}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Live Timeline */}
+                            <div className={`absolute inset-0 overflow-y-auto p-8 ${activeTab === "timeline" ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"}`}>
+                                <div className="max-w-3xl mx-auto">
+                                    <h2 className="text-2xl font-bold mb-8 border-b border-gray-800 pb-4">Live Execution Timeline</h2>
+                                    {timeline.length === 0 ? (
+                                        <div className="text-center text-gray-700 mt-24 text-sm">No state transitions yet. Trigger a run.</div>
+                                    ) : (
+                                        <div className="relative border-l-2 border-gray-800 ml-6 pb-12">
+                                            {timeline.map((item, idx) => {
+                                                const to = item.metadata?.to || item.state;
+                                                return (
+                                                    <div key={idx} className="mb-8 ml-8 relative">
+                                                        <span className="absolute -left-[41px] top-1 h-5 w-5 rounded-full border-4 border-gray-950 shadow-lg"
+                                                            style={{ background: STATE_COL[to] || "#6b7280" }} />
+                                                        <div className="flex items-center gap-3 mb-1">
+                                                            <span className="text-gray-500 font-mono text-sm">{fmtTs(item.timestamp)}</span>
+                                                            <span className="font-bold text-lg text-white">{to}</span>
+                                                        </div>
+                                                        <p className="text-gray-400 text-sm">{item.message}</p>
+                                                        {item.metadata?.issue && (
+                                                            <span className="mt-2 inline-block px-2 py-0.5 bg-gray-800 rounded text-xs font-mono text-gray-500 border border-gray-700">{item.metadata.issue}</span>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Roadmap */}
+                            {isSystem && (
+                                <div className={`absolute inset-0 overflow-y-auto p-6 ${activeTab === "backlog" ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"}`}>
+                                    <div className="max-w-5xl mx-auto">
+                                        <h2 className="text-2xl font-bold mb-6">Autonomous Roadmap</h2>
+                                        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-black text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
+                                                    <tr>{["Epic", "Title", "Status", "Risk", "Action"].map(h => <th key={h} className="px-5 py-3 text-left">{h}</th>)}</tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-800">
+                                                    {backlog.map((item, idx) => (
+                                                        <tr key={idx} className="hover:bg-gray-800/50 transition-colors">
+                                                            <td className="px-5 py-3 font-mono text-xs text-orange-400">{item.id}</td>
+                                                            <td className="px-5 py-3 font-semibold">
+                                                                <div>{item.title}</div>
+                                                                <div className="text-xs font-normal text-gray-500 mt-0.5">{item.description}</div>
+                                                            </td>
+                                                            <td className="px-5 py-3"><StatusBadge status={item.status} /></td>
+                                                            <td className="px-5 py-3">
+                                                                {item.risk_zone && <Badge color={{ green: "green", yellow: "yellow", red: "red" }[item.risk_zone]}>{item.risk_zone}</Badge>}
+                                                            </td>
+                                                            <td className="px-5 py-3">
+                                                                <button onClick={() => fetch("/api/v1/improvement/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ epic_id: item.id }) }).then(r => r.json()).then(() => setActiveTab("mission")).catch(console.error)}
+                                                                    className="px-3 py-1.5 bg-green-600/20 hover:bg-green-600/40 text-green-400 border border-green-600/40 rounded text-xs font-bold transition-colors">
+                                                                    Execute
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* OmniBench */}
+                            {isSystem && (
+                                <div className={`absolute inset-0 overflow-y-auto p-6 ${activeTab === "omnibench" ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"}`}>
+                                    <div className="max-w-4xl mx-auto h-full flex flex-col">
+                                        <h2 className="text-2xl font-bold mb-6 text-rose-400">OmniBench Baseline</h2>
+                                        <div className="flex-1 bg-gray-900 border border-gray-800 rounded-xl p-6 overflow-hidden shadow-2xl">
+                                            <pre className="text-sm font-mono text-rose-200/80 w-full h-full overflow-y-auto">{omnibench}</pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Telemetry */}
+                            <div className={`absolute inset-0 flex flex-col ${activeTab === "telemetry" ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"}`}>
+                                <div className="flex-1 overflow-y-auto p-4 font-mono text-sm leading-relaxed bg-black">
+                                    {logs.length === 0 ? <div className="text-gray-700 italic mt-4">Waiting for telemetry…</div>
+                                        : logs.map((log, i) => {
+                                            try {
+                                                const p = JSON.parse(log);
+                                                const isCost = p.event_type === "api_cost";
+                                                const sc = p.state === "FAILED" ? "text-red-400" : p.state === "DONE" ? "text-green-400" : p.event_type === "scheduler_tick" ? "text-orange-400" : "text-blue-400";
+                                                return (
+                                                    <div key={i} className={`mb-1 hover:bg-gray-900 px-2 py-1 rounded flex flex-col ${isCost ? "bg-green-900/10 border-l-2 border-green-500/50" : ""}${p.state === "SCHEDULER" ? " border-l-2 border-orange-500/30 bg-orange-900/5" : ""}`}>
+                                                        <div>
+                                                            <span className="text-gray-700 mr-2">[{fmtTs(p.timestamp)}]</span>
+                                                            <span className={`${isCost ? "text-green-400 font-bold" : "text-gray-500"} mr-2 uppercase text-xs tracking-wider`}>{p.event_type}</span>
+                                                            <span className={`${sc} font-bold mr-2`}>[{p.state}]</span>
+                                                            <span className="text-gray-300 text-xs">{p.message}</span>
+                                                        </div>
+                                                        {p.metadata && Object.keys(p.metadata).length > 0 && (
+                                                            <pre className="text-gray-600 text-xs ml-10 mt-0.5 pl-2 border-l border-gray-800">
+                                                                {JSON.stringify(p.metadata, null, 2)}
+                                                            </pre>
+                                                        )}
+                                                    </div>
+                                                );
+                                            } catch { return <div key={i} className="text-gray-700 px-2 text-xs break-words">{log}</div>; }
+                                        })}
+                                    <div ref={logsEndRef} />
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    {/* Global Task Detail */}
+                    {selTask && <TaskDetail task={selTask} onClose={() => setSelTask(null)} />}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById("root"));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>

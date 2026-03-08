@@ -1,0 +1,155 @@
+{
+  "timestamp": 1772922086.743861,
+  "total_tasks": 18,
+  "successes": 0,
+  "success_rate_percent": 0.0,
+  "total_cost_usd": 0.0,
+  "average_cost_usd": 0.0,
+  "total_time_seconds": 3350.1937279701233,
+  "individual_results": [
+    {
+      "issue_number": 6102,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 400.5062780380249,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 4965,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 786.4295146465302,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 3829,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 1616.9097170829773,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 3296,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 59.00432896614075,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2716,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 42.71099805831909,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2392,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 45.23647904396057,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2086,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 18.025624990463257,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2018,
+      "repo": "https://github.com/psf/requests",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 25.50729489326477,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 3111,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 56.388465881347656,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 3067,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 21.984604120254517,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2994,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 19.960006952285767,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2968,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 80.20976185798645,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2868,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 17.435716152191162,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2865,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 21.424209117889404,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2847,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 38.58383893966675,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2836,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 24.501166105270386,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2827,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 52.336223125457764,
+      "status": "FAIL"
+    },
+    {
+      "issue_number": 2819,
+      "repo": "https://github.com/pallets/click",
+      "success": false,
+      "cost": 0.0,
+      "time_seconds": 23.038729906082153,
+      "status": "FAIL"
+    }
+  ]
+}

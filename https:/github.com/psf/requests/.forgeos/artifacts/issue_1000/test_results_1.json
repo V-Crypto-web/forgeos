@@ -1,0 +1,7 @@
+{
+  "status": "failed",
+  "output": "============================= test session starts ==============================\nplatform darwin -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0\nrootdir: /private/tmp/forgeos_workspaces/requests_issue_1000\nplugins: mock-3.15.1, httpbin-2.1.0, cov-7.0.0\ncollected 0 items\n\n============================ no tests ran in 0.00s =============================\n",
+  "errors": "",
+  "returncode": 5,
+  "command": "/tmp/forgeos_workspaces/requests_issue_1000/.venv/bin/python -m pytest"
+}

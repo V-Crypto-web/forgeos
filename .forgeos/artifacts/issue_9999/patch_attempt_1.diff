@@ -1,0 +1,49 @@
+```diff
+--- forgeos/observability/telemetry.py
++++ forgeos/observability/telemetry.py
+@@ -10,6 +10,7 @@
+ 
+ class TelemetryLogger:
+     def __init__(self):
++        self.council_rejections = 0
+ 
+     def log_event(self, event_type, approved, issue_number, state):
+         payload = {
+@@ -20,6 +21,10 @@
+         }
+         
+         if event_type == 'council_review' and approved == False:
++            self.council_rejections += 1
++            payload['council_rejections'] = self.council_rejections
++
++        # Existing logic
+         payload['issue_number'] = issue_number
+         payload['state'] = state
+         self.send_to_telemetry_service(payload)
+
+--- forgeos/agents/council.py
++++ forgeos/agents/council.py
+@@ -25,6 +25,7 @@
+ class CouncilAgent:
+     def deliberate(self, plan):
+         # Logic for deliberation
+         approved = self.evaluate_plan(plan)
++        logger = TelemetryLogger()
+         
+         if not approved:
+             # Emit telemetry event indicating rejection
+             logger.log_event('council_review', approved, plan.issue_number, plan.state)
+
+--- forge_bench/data/flask/tests/test_logging.py
++++ forge_bench/data/flask/tests/test_logging.py
+@@ -1,5 +1,6 @@
+ import unittest
+ from forgeos.observability.telemetry import TelemetryLogger
+ 
+ class TestTelemetryLogger(unittest.TestCase):
+ 
++    def test_council_rejections_logging(self):
++        logger = TelemetryLogger()
++        logger.log_event('council_review', False, 123, 'pending')
++        self.assertEqual(logger.council_rejections, 1)
+```

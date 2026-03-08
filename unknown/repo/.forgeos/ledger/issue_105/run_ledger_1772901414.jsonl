@@ -1,0 +1,9 @@
+{"timestamp": 1772901414.2519228, "event_type": "state_transition", "payload": {"state": "INIT", "message": "Initializing execution context."}}
+{"timestamp": 1772901414.252119, "event_type": "state_transition", "payload": {"state": "FETCH_ISSUE", "message": "Fetching issue details for issue: 105"}}
+{"timestamp": 1772901414.2820601, "event_type": "state_transition", "payload": {"state": "FETCH_ISSUE", "message": "Parsing Core Spec and ADRs for context injection."}}
+{"timestamp": 1772901414.282399, "event_type": "state_transition", "payload": {"state": "PLAN", "message": "Planning task execution.", "traceability_id": "task_from_issue"}}
+{"timestamp": 1772901415.793241, "event_type": "state_transition", "payload": {"state": "VERIFY", "message": "Failure Taxonomy Engine classified failure as: UNKNOWN"}}
+{"timestamp": 1772901415.794079, "event_type": "state_transition", "payload": {"state": "PLAN", "message": "Planning task execution.", "traceability_id": "task_from_issue"}}
+{"timestamp": 1772901416.125994, "event_type": "state_transition", "payload": {"state": "VERIFY", "message": "Failure Taxonomy Engine classified failure as: UNKNOWN"}}
+{"timestamp": 1772901416.126721, "event_type": "state_transition", "payload": {"state": "PLAN", "message": "Planning task execution.", "traceability_id": "task_from_issue"}}
+{"timestamp": 1772901416.459625, "event_type": "state_transition", "payload": {"state": "VERIFY", "message": "Failure Taxonomy Engine classified failure as: UNKNOWN"}}

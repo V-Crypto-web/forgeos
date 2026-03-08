@@ -1,0 +1,7 @@
+{
+  "status": "failed",
+  "output": "",
+  "errors": "ImportError while loading conftest '/private/tmp/forgeos_workspaces/starlette_issue_1012/tests/conftest.py'.\ntests/conftest.py:8: in <module>\n    from starlette.testclient import TestClient\nstarlette/testclient.py:40: in <module>\n    raise RuntimeError(\nE   RuntimeError: The starlette.testclient module requires the httpx package to be installed.\nE   You can install this with:\nE       $ pip install httpx\n",
+  "returncode": 4,
+  "command": "/tmp/forgeos_workspaces/starlette_issue_1012/.venv/bin/python -m pytest"
+}

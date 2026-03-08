@@ -1,0 +1,23 @@
+[
+    {
+        "id": 1,
+        "repo_name": "dummy_api",
+        "category": "Bug Fix",
+        "title": "Fix calculate_discount handling of integer discounts",
+        "description": "If someone passes discount=10, the current code throws an error because it expects values between 0 and 1. We need it to divide by 100 if the discount is > 1. For example, discount 10 should mean 10% (0.1)."
+    },
+    {
+        "id": 2,
+        "repo_name": "dummy_api",
+        "category": "Test Generation",
+        "title": "Write unit tests for calculate_discount function",
+        "description": "Add a file `test_main.py` using pytest with at least 3 test cases for `calculate_discount` (normal case, 0% discount, 100% discount)."
+    },
+    {
+        "id": 9999,
+        "repo_name": "ForgeAI",
+        "category": "Self-Improvement",
+        "title": "Enhance TelemetryLogger with a new council_rejections metric",
+        "description": "In `forgeos/observability/telemetry.py`, modify `log_event` and any necessary underlying logic to track the total number of times the Multi-Agent Council rejects a plan. Add a new numeric field `council_rejections` to the JSON payload whenever `event_type == 'council_review'` and `approved == False` is found in the metadata. Do not break existing fields like `issue_number` or `state`."
+    }
+]
