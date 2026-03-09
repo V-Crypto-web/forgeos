@@ -19,5 +19,12 @@
         "category": "Self-Improvement",
         "title": "Enhance TelemetryLogger with a new council_rejections metric",
         "description": "In `forgeos/observability/telemetry.py`, modify `log_event` and any necessary underlying logic to track the total number of times the Multi-Agent Council rejects a plan. Add a new numeric field `council_rejections` to the JSON payload whenever `event_type == 'council_review'` and `approved == False` is found in the metadata. Do not break existing fields like `issue_number` or `state`."
+    },
+    {
+        "id": 10000,
+        "repo_name": "ForgeAI",
+        "category": "Epic",
+        "title": "Implement a full authentication system",
+        "description": "We need a complete authentication system. This involves creating user database models (user.py in models/), a JWT-based authentication utility class (auth.py in core/), and the necessary FastAPI login/register routes (auth_routes.py in api/)."
     }
 ]

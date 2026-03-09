@@ -220,6 +220,11 @@ class StateMachine:
         return context
 
     def handle_fetch_issue(self, context: ExecutionContext) -> ExecutionContext:
+        if context.issue_text:
+            self.log_and_record(context, "Issue text provided via CTO Agent. Skipping fetch.")
+            context.current_state = EngineState.PATTERN_RETRIEVAL
+            return context
+            
         self.log_and_record(context, f"Fetching issue details for issue: {context.issue_number}")
         
         from forgeos.connectors.github_connector import GitHubConnector

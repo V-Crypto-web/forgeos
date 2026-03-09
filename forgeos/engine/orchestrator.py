@@ -16,7 +16,9 @@ app = FastAPI(title="ForgeOS Development Engine", version="1.2.0")
 class TaskRequest(BaseModel):
     issue_number: int
     repo_url: str
-    
+    issue_title: str | None = None
+    issue_description: str | None = None
+
 class TaskResponse(BaseModel):
     status: str
     message: str
@@ -28,8 +30,12 @@ executions: Dict[str, ExecutionContext] = {}
 def execute_engine_flow(job_id: str, request: TaskRequest):
     """Background task to run the State Machine orchestrator."""
     # Extract project name from URL to form the strict workspace path
-    repo_name = request.repo_url.split('/')[-1].replace('.git', '')
-    workspace_path = f"/tmp/forgeos_workspaces/{repo_name}_issue_{request.issue_number}"
+    if request.repo_url.startswith("/") or request.repo_url.startswith("./"):
+        # Local mock repo for gauntlet
+        workspace_path = request.repo_url
+    else:
+        repo_name = request.repo_url.split('/')[-1].replace('.git', '')
+        workspace_path = f"/tmp/forgeos_workspaces/{repo_name}_issue_{request.issue_number}"
     
     memory_manager = FailureMemory(issue_id=request.issue_number)
     artifact_manager = ArtifactManager(workspace_path=workspace_path, issue_number=request.issue_number)
@@ -44,6 +50,9 @@ def execute_engine_flow(job_id: str, request: TaskRequest):
         telemetry=telemetry_logger,
         run_ledger=run_ledger
     )
+    if request.issue_title and request.issue_description:
+        context.issue_text = f"Title: {request.issue_title}\nBody: {request.issue_description}"
+        
     executions[job_id] = context
     
     machine = StateMachine()
