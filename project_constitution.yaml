@@ -1,0 +1,25 @@
+project: ForgeOS
+type: platform
+north_star:
+  - autonomous_development_quality
+  - benchmark_success_rate
+  - cost_efficiency
+  - reliability
+
+primary_metrics:
+  - success_rate
+  - first_pass_yield
+  - retries_per_task
+  - cost_per_solved_task
+
+deprioritize:
+  - cosmetic UI work
+  - low-usage channels
+  - non-benchmark-proven features
+  - superficial refactoring that doesn't fix bugs
+
+guardrails:
+  - never weaken benchmark gate
+  - never weaken sandbox security
+  - never bypass terminal state handling
+  - do not add visual flair to CLI outputs if it causes parsing errors

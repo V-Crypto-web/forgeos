@@ -137,6 +137,21 @@ class ProviderRouter:
   ]
 }
 ```'''
+        elif "objective engine" in system_prompt.lower():
+            if "REVISED" in user_prompt.upper():
+                content = '''```json
+{
+  "approved": true,
+  "reason": "Revised plan aligns with constitution."
+}
+```'''
+            else:
+                content = '''```json
+{
+  "approved": false,
+  "reason": "Constitution Violation: Attempting to modify cosmetic UI elements which is strictly deprioritized."
+}
+```'''
         elif "plan" in user_prompt.lower():
             content = "1. Check auth.py \\n 2. Add empty string check -> return False."
         elif "patch" in user_prompt.lower():

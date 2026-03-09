@@ -82,7 +82,9 @@ def main():
             # We won't clone the repo in the CLI just for the map. We can pass a dummy map or 
             # a highly compressed summary for MVP.
             repo_map_mock = "Main directories: api/, models/, core/. Python backend."
-            plan, _ = cto.decompose_epic(epic_title, epic_body, repo_map_mock)
+            # Local path is usually the pwd for MVP tests
+            local_repo_path = "/Users/vasiliyprachev/Python_Projects/ForgeAI" if "ForgeAI" in repo_url else ""
+            plan, _ = cto.decompose_epic(epic_title, epic_body, repo_map_mock, repo_path=local_repo_path)
             
             sub_tasks = plan.get("sub_tasks", [])
             print(f"  CTO Agent generated {len(sub_tasks)} Sub-Tasks.")

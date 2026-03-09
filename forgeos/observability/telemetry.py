@@ -68,16 +68,33 @@ class TelemetryLogger:
             }
         )
         
-    def log_symbol_graph_hit(self, issue_number: int, state: str, symbol_count: int):
+    def log_symbol_graph_hit(self, issue_number: int, state: str, symbol_count: int, parent_epic_id: int = None):
         """
         Special event for tracking successful injections of Symbol Graph context (Epic 48).
         """
         self.log_event(
             event_type="symbol_graph_hit",
             issue_number=issue_number,
+            parent_epic_id=parent_epic_id,
             state=state,
             message=f"Injected Symbol Graph context for {symbol_count} relevant symbols.",
             metadata={
                 "symbol_count": symbol_count
+            }
+        )
+
+    def log_constitution_eval(self, issue_number: int, state: str, is_approved: bool, reason: str, parent_epic_id: int = None):
+        """
+        Special event for tracking ObjectiveEngine (Project Constitution) evaluations.
+        """
+        self.log_event(
+            event_type="constitution_eval",
+            issue_number=issue_number,
+            parent_epic_id=parent_epic_id,
+            state=state,
+            message=f"Constitution Evaluation: {'APPROVED' if is_approved else 'REJECTED'}",
+            metadata={
+                "approved": is_approved,
+                "reason": reason
             }
         )

@@ -11,13 +11,23 @@ class CTOAgent:
     def __init__(self, router: ProviderRouter):
         self.router = router
 
-    def decompose_epic(self, epic_title: str, epic_body: str, repo_map_summary: str) -> Dict[str, Any]:
+    def decompose_epic(self, epic_title: str, epic_body: str, repo_map_summary: str, repo_path: str = "") -> Dict[str, Any]:
         """
         Analyzes the epic and returns a JSON structure of sub-tasks.
+        Consults the Project Constitution to align sub-tasks with North Star metrics.
         """
-        sys_prompt = """You are the CTO Agent for ForgeOS.
+        from forgeos.engine.objective_engine import ObjectiveEngine
+        objective_engine = ObjectiveEngine(self.router)
+        if repo_path:
+            objective_engine.load_constitution(repo_path)
+            
+        constitution_rules = objective_engine.get_context_injection()
+        
+        sys_prompt = f"""You are the CTO Agent for ForgeOS.
 Your job is to read a large 'Epic' feature request and break it down into a sequence of smaller, actionable Sub-Tasks.
 Each Sub-Task must be small enough for a single junior developer (Coder Agent) to implement perfectly via an AST-safe, narrow-scoped patch.
+
+{constitution_rules}
 
 RULES:
 1. Tasks must be technically explicit. No vague product requirements.

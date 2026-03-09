@@ -372,7 +372,15 @@ class StateMachine:
         analyzer = RepoAnalyzer(context.repo_path if context.repo_path else ".")
         from forgeos.engine.context_pack import ContextPackBuilder
         pack_builder = ContextPackBuilder(context, analyzer)
-        planner_prompt = pack_builder.build_planner_prompt()
+        
+        # Epic 62: Constitution Context
+        from forgeos.engine.objective_engine import ObjectiveEngine
+        temp_obj_engine = ObjectiveEngine(ProviderRouter())
+        if context.repo_path:
+            temp_obj_engine.load_constitution(context.repo_path)
+        objective_rules = temp_obj_engine.get_context_injection()
+        
+        planner_prompt = pack_builder.build_planner_prompt() + "\n" + objective_rules
         
         router = ProviderRouter()
         planner = PlannerAgent(router)
@@ -386,6 +394,36 @@ class StateMachine:
         
         if context.telemetry:
             context.telemetry.log_cost(context.issue_number, context.current_state.value, stats["model"], stats["prompt_tokens"], stats["completion_tokens"])
+            
+        # Epic 62: Project Constitution & Objective Layer
+        from forgeos.engine.objective_engine import ObjectiveEngine
+        objective_engine = ObjectiveEngine(router)
+        if context.repo_path:
+            objective_engine.load_constitution(context.repo_path)
+            
+        obj_approved, obj_reason, obj_stats = objective_engine.evaluate_plan(context.plan, context.issue_text)
+        obj_cost = obj_stats.get("cost", 0.0)
+        context.global_cost += obj_cost
+        
+        if context.telemetry:
+            context.telemetry.log_constitution_eval(
+                issue_number=context.issue_number,
+                state=context.current_state.value,
+                is_approved=obj_approved,
+                reason=obj_reason,
+                parent_epic_id=context.parent_epic_id
+            )
+            
+        if not obj_approved:
+            self.log_and_record(context, f"🛑 CONSTITUTION VIOLATION 🛑\nObjective Engine REJECTED the plan:\n{obj_reason}")
+            context.logs.append("Forcing Planner to revise plan based on Constitution alignment...")
+            revision_prompt = f"{planner_prompt}\n\nPREVIOUS DRAFT REJECTED BY OBJECTIVE ENGINE (CONSTITUTION VIOLATION).\nREASON:\n{obj_reason}\nPlease provide a revised plan strictly adhering to the project's North Star and avoiding the guardrails."
+            context.plan, r_stats = planner.generate_plan(revision_prompt)
+            r_cost = r_stats.get("cost", 0.0)
+            context.global_cost += r_cost
+            context.logs.append(f"Revised constitution-aligned plan generated [COST: ${r_cost:.4f}]")
+        else:
+            self.log_and_record(context, "✅ Plan aligns with Project Constitution.")
             
         # Council Deliberation Loop
         from forgeos.agents.council import CouncilAgent
