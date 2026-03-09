@@ -85,11 +85,13 @@ class ContextPackBuilder:
                 score += 10
             # 2. Match on classes
             for c in data.get("classes", []):
-                if any(kw in c.lower() for kw in keywords):
+                c_name = c.get("name").lower() if isinstance(c, dict) else c.lower()
+                if any(kw in c_name for kw in keywords):
                     score += 5
             # 3. Match on functions
             for f in data.get("functions", []):
-                if any(kw in f.lower() for kw in keywords):
+                f_name = f.get("name").lower() if isinstance(f, dict) else f.lower()
+                if any(kw in f_name for kw in keywords):
                     score += 3
                     
             # Bonus for core files
@@ -108,9 +110,11 @@ class ContextPackBuilder:
         for score, filepath, data in top_files:
             lines.append(f"\\nFile: {filepath} (Relevance Score: {score})")
             if data.get("classes"):
-                lines.append("  Classes: " + ", ".join(data["classes"]))
+                c_names = [c.get("name") if isinstance(c, dict) else c for c in data["classes"]]
+                lines.append("  Classes: " + ", ".join(c_names))
             if data.get("functions"):
-                lines.append("  Functions: " + ", ".join(data["functions"]))
+                f_names = [f.get("name") if isinstance(f, dict) else f for f in data["functions"]]
+                lines.append("  Functions: " + ", ".join(f_names))
                 
         return "\\n".join(lines)
 
@@ -159,6 +163,7 @@ RECENT FAILURES:
         symbol_index = self._load_json_artifact("symbol_index.json")
         symbol_definitions = self._load_json_artifact("symbol_definitions.json")
         repo_map = self._load_json_artifact("repo_map.json")
+        symbol_graph = self._load_json_artifact("symbol_graph.json")
         
         l2_text_components = []
         l2_text_components.append(f"PREVIOUS PLAN:\n{self.get_compressed_plan_history()}")
@@ -168,6 +173,7 @@ RECENT FAILURES:
         relevant_symbols = []
         
         if symbol_index:
+            hit_symbol_graph = False
             for file_path, symbols in symbol_index.get("files", {}).items():
                 for sym_name, sym_type in symbols.items():
                     if any(kw in sym_name.lower() or kw in file_path.lower() for kw in issue_keywords):
@@ -176,15 +182,29 @@ RECENT FAILURES:
                             sym_def = symbol_definitions.get("files", {}).get(file_path, {}).get(sym_name, {})
                             snippet = sym_def.get("snippet", "")
                         
+                        graph_info = ""
+                        if symbol_graph and sym_type == "function" and sym_name in symbol_graph:
+                            node = symbol_graph[sym_name]
+                            callers = node.get("callers", [])
+                            callees = node.get("callees", [])
+                            imports = node.get("imports", [])
+                            graph_info = f"\n  - Callers: {', '.join(callers) if callers else 'None'}\n  - Callees: {', '.join(callees) if callees else 'None'}\n  - File Imports: {', '.join(imports) if imports else 'None'}"
+                            hit_symbol_graph = True
+
                         if snippet:
                             # Truncate massive classes/functions to ~40 lines to preserve token budget
                             # Allows the planner to see the __init__ and signatures, but not the whole body
                             lines = snippet.split('\n')
                             if len(lines) > 40:
                                 snippet = '\n'.join(lines[:40]) + '\n    # ... (body truncated to save context window)'
-                            relevant_symbols.append(f"### {sym_type.upper()}: {sym_name} (in {file_path})\n```python\n{snippet}\n```")
+                            relevant_symbols.append(f"### {sym_type.upper()}: {sym_name} (in {file_path}){graph_info}\n```python\n{snippet}\n```")
                         else:
-                            relevant_symbols.append(f"- {sym_type} {sym_name} in {file_path}")
+                            relevant_symbols.append(f"- {sym_type} {sym_name} in {file_path}{graph_info}")
+                            
+            if hit_symbol_graph and self.ctx.telemetry:
+                # Assuming TelemetryLogger has log_symbol_graph_hit
+                if hasattr(self.ctx.telemetry, 'log_symbol_graph_hit'):
+                    self.ctx.telemetry.log_symbol_graph_hit(self.ctx.issue_number, self.ctx.current_state.value, len(relevant_symbols))
                         
         if relevant_symbols:
             # Take top 15 relevant symbols to avoid blowing budget (was 20, but now they are much larger blocks)
