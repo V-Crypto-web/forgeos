@@ -18,6 +18,7 @@ class TaskRequest(BaseModel):
     repo_url: str
     issue_title: str | None = None
     issue_description: str | None = None
+    parent_epic_id: int | None = None
 
 class TaskResponse(BaseModel):
     status: str
@@ -44,6 +45,7 @@ def execute_engine_flow(job_id: str, request: TaskRequest):
     
     context = ExecutionContext(
         issue_number=request.issue_number,
+        parent_epic_id=request.parent_epic_id,
         repo_path=workspace_path, 
         failure_memory=memory_manager,
         artifact_manager=artifact_manager,

@@ -24,6 +24,7 @@ class EngineState(str, Enum):
 
 class ExecutionContext(BaseModel):
     issue_number: Optional[int] = None
+    parent_epic_id: Optional[int] = None
     repo_path: Optional[str] = None
     github_url: Optional[str] = None   # GitHub repo URL for issue fetch + PR creation
     plan: Optional[str] = None
@@ -154,7 +155,7 @@ class StateMachine:
         """Helper to append to local memory array and write to structured telemetry."""
         context.logs.append(message)
         if context.telemetry:
-            context.telemetry.log_event(event_type, context.issue_number, context.current_state.value, message, metadata)
+            context.telemetry.log_event(event_type, context.issue_number, context.current_state.value, message, metadata, parent_epic_id=context.parent_epic_id)
         if context.run_ledger:
             payload = {"state": context.current_state.value, "message": message}
             if metadata:

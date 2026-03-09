@@ -43,6 +43,10 @@ def main():
         from forgeos.connectors.github_connector import GitHubConnector
         from forgeos.agents.cto_agent import CTOAgent
         from forgeos.providers.model_router import ProviderRouter
+        from forgeos.observability.telemetry import TelemetryLogger
+        
+        epic_logger = TelemetryLogger(workspace_path=f"/tmp/forgeos_workspaces/epic_{issue_number}")
+        epic_logger.log_event("epic_received", issue_number, "INIT", f"Received Epic {issue_number} for {repo_url}")
         
         print(f"\\n🧠 CTO Agent starting Epic Decomposition for {repo_url} Issue #{issue_number}")
         github = GitHubConnector()
@@ -83,8 +87,12 @@ def main():
             sub_tasks = plan.get("sub_tasks", [])
             print(f"  CTO Agent generated {len(sub_tasks)} Sub-Tasks.")
             
+            epic_logger.log_event("epic_decomposed", issue_number, "PLANNING", f"Decomposed into {len(sub_tasks)} tasks", metadata={"sub_tasks_count": len(sub_tasks)})
+            
             # Execute them sequentially
             for idx, task in enumerate(sub_tasks):
+                epic_logger.log_event("subtask_started", issue_number, "EXECUTION", f"Started Sub-Task {idx+1}: {task.get('title')}", metadata={"sub_task_idx": idx+1, "title": task.get('title')})
+                
                 print(f"\\n================================================================")
                 print(f"🚀 Spawning ForgeOS Instance {idx+1}/{len(sub_tasks)}")
                 print(f"   Task: {task.get('title')}")
@@ -95,6 +103,7 @@ def main():
                 # We pass issue_number + something, or just reuse issue_number for DB linking
                 sub_request = TaskRequest(
                     issue_number=issue_number, 
+                    parent_epic_id=issue_number,
                     repo_url=repo_url,
                     issue_title=task.get('title'),
                     issue_description=task.get('description')
@@ -126,11 +135,14 @@ def main():
                     time.sleep(0.5)
                     
                 if current_state == EngineState.DONE:
+                    epic_logger.log_event("subtask_completed", issue_number, "DONE", f"Completed Sub-Task {idx+1}", metadata={"sub_task_idx": idx+1, "status": "success"})
                     print(f"✅ Sub-Task {idx+1} resolved successfully!")
                 else:
+                    epic_logger.log_event("subtask_completed", issue_number, "FAILED", f"Failed Sub-Task {idx+1}", metadata={"sub_task_idx": idx+1, "status": "failed"})
                     print(f"❌ Failed to resolve Sub-Task {idx+1}. Halting Epic pipeline.")
                     break
                     
+            epic_logger.log_event("epic_completed", issue_number, "DONE", f"Epic {issue_number} Execution Finished")
             sys.exit(0)
                     
         except Exception as e:

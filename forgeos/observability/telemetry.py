@@ -15,7 +15,7 @@ class TelemetryLogger:
         os.makedirs(self.log_dir, exist_ok=True)
         self.log_file = os.path.join(self.log_dir, "forgeos_telemetry.log")
         
-    def log_event(self, event_type: str, issue_number: int, state: str, message: str, metadata: Dict[str, Any] = None):
+    def log_event(self, event_type: str, issue_number: int, state: str, message: str, metadata: Dict[str, Any] = None, parent_epic_id: int = None):
         """
         Records a structured telemetry event.
         """
@@ -23,6 +23,7 @@ class TelemetryLogger:
             "timestamp": time.time(),
             "event_type": event_type,
             "issue_number": issue_number,
+            "parent_epic_id": parent_epic_id,
             "state": state,
             "message": message,
             "metadata": metadata or {}
@@ -49,7 +50,34 @@ class TelemetryLogger:
             metadata={
                 "model": model,
                 "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
                 "cost": cost
+            }
+        )
+        
+    def log_async_hazard(self, issue_number: int, state: str, patch_snippet: str):
+        """
+        Special event for tracking Async Safety hazards detected by the Critic's static checker.
+        """
+        self.log_event(
+            event_type="async_safety_hazard",
+            issue_number=issue_number,
+            state=state,
+            message="Static Checker flagged missing await/asyncio.run in patch.",
+            metadata={
+                "patch_snippet": patch_snippet[:200]
+            }
+        )
+        
+    def log_symbol_graph_hit(self, issue_number: int, state: str, symbol_count: int):
+        """
+        Special event for tracking successful injections of Symbol Graph context (Epic 48).
+        """
+        self.log_event(
+            event_type="symbol_graph_hit",
+            issue_number=issue_number,
+            state=state,
+            message=f"Injected Symbol Graph context for {symbol_count} relevant symbols.",
+            metadata={
+                "symbol_count": symbol_count
             }
         )
