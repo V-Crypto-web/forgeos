@@ -132,10 +132,21 @@ class ContextPackBuilder:
         
         pattern_str = "No historical patterns found."
         if hasattr(self.ctx, 'pattern_context') and self.ctx.pattern_context:
-            try:
-                pattern_str = json.dumps(self.ctx.pattern_context, indent=2)
-            except Exception:
-                pass
+            if self.ctx.pattern_context.get("similar_patterns_found", 0) > 0:
+                p_ctx = self.ctx.pattern_context
+                rec = ", ".join(p_ctx.get("recommended_strategies", []))
+                avoid = ", ".join(p_ctx.get("avoid_strategies", []))
+                test_scope = ", ".join(p_ctx.get("recommended_test_scopes", []))
+                notes = "\n  - ".join(p_ctx.get("historical_notes", []))
+                
+                pattern_str = f"ADVISORY GUIDANCE FROM PRIOR RUNS:\n"
+                pattern_str += f"- RECOMMENDED STRATEGIES: {rec if rec else 'None'}\n"
+                pattern_str += f"- STRATEGIES TO AVOID: {avoid if avoid else 'None'}\n"
+                pattern_str += f"- RECOMMENDED TEST SCOPE: {test_scope if test_scope else 'Unknown'}\n"
+                if notes:
+                    pattern_str += f"- RISK NOTES / OBSERVATIONS:\n  - {notes}"
+            else:
+                pattern_str = "No historical patterns matched. Proceed with standard planning."
 
         l1_context = f"""=== [L0] SCOPE CONSTRAINTS (PATCH BUDGET) ===
 You are bounded by strict Execution Limits to prevent Scope Explosion.

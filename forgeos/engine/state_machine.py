@@ -163,6 +163,9 @@ class StateMachine:
 
     def _trigger_learning_loop(self, context: ExecutionContext, outcome: str):
         """Asynchronously triggers the LLM to extract the pattern from the run execution so it can be used for future instances."""
+        if context.telemetry:
+            context.telemetry.log_event("pattern_learning_triggered", context.issue_number or "task", context.current_state.value, f"Started pattern extraction for outcome: {outcome}")
+            
         import threading
         def _learn():
             try:
@@ -189,6 +192,10 @@ class StateMachine:
                 
                 library.save_pattern(record)
                 self.log_and_record(context, f"Learning Loop completed. Saved Pattern ID '{record.pattern_id}' with outcome '{outcome}'.")
+                
+                if context.telemetry:
+                    context.telemetry.log_event("pattern_saved", context.issue_number or "task", context.current_state.value, f"Saved Pattern ID: {record.pattern_id}")
+                    
             except Exception as e:
                 self.log_and_record(context, f"Learning Loop failed: {e}", event_type="warning")
                 
@@ -332,8 +339,12 @@ class StateMachine:
             
             if match_res["similar_patterns_found"] > 0:
                 self.log_and_record(context, f"Found {match_res['similar_patterns_found']} successful patterns matching repo_class='{repo_class}' and issue_class='{issue_class}'. Constraints set.")
+                if context.telemetry:
+                    context.telemetry.log_event("pattern_retrieval_hit", context.issue_number or "task", context.current_state.value, "Found matching patterns", {"count": match_res["similar_patterns_found"]})
             else:
                 self.log_and_record(context, "No strict pattern match found. Planner will operate without historical constraints.")
+                if context.telemetry:
+                    context.telemetry.log_event("pattern_retrieval_miss", context.issue_number or "task", context.current_state.value, "No matching patterns found")
                 
         except Exception as e:
             self.log_and_record(context, f"Pattern Library retrieval warning: {e}", event_type="warning")
@@ -463,7 +474,11 @@ class StateMachine:
         
         try:
             plan_str = context.plan if context.plan else ""
-            touched_files = [f for f in context.repo_map.keys()][:3] if context.repo_map else []
+            
+            # Fetch the actual repo map keys instead of crashing on context.repo_map
+            actual_repo_map = analyzer.generate_repo_map()
+            touched_files = list(actual_repo_map.keys())[:3] if actual_repo_map else []
+            
             report = impact.analyze_impact(touched_files)
             
             if context.artifact_manager:
@@ -623,6 +638,10 @@ class StateMachine:
                 
             rejection_text = "\\n".join(reasons)
             context.logs.append(f"Critic REJECTED the patch.\\n{rejection_text}")
+            
+            # Epic 59 Async Hazard Tracking
+            if context.telemetry and "await" not in (context.patch or "").lower() and "async" in (context.patch or "").lower():
+                context.telemetry.log_async_hazard(context.issue_number, context.current_state.value, context.patch)
             
             context.test_results = {
                 "status": "failed",

@@ -14,6 +14,11 @@ def run_test():
     print("Embedding pattern...")
     embedding = router.get_embedding("Issue: tiny_bugfix The NoneType token is unhandled. Failure: NoneType object has no attribute strip")
     
+    # Fallback for deterministic tests when API key is missing
+    if not embedding:
+        print("Using deterministic mock embedding for local test...")
+        embedding = [0.1] * 1536
+    
     p1 = PatternRecord(
         pattern_id="test_pat_1",
         repo_class="http_client",
