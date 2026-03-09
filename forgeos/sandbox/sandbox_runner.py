@@ -34,9 +34,16 @@ class SandboxRunner:
         profile_path = os.path.join(repo_path, "repo_profile.yaml")
         venv_path = os.path.join(repo_path, ".venv")
         python_exec = os.path.join(venv_path, "bin", "python")
-        
+        pytest_exec = os.path.join(venv_path, "bin", "pytest")
+
+        # Fast path: existing .venv with pytest already installed — just use it
+        if os.path.exists(python_exec) and os.path.exists(pytest_exec):
+            print(f"Reusing existing .venv at {venv_path} (pytest already installed).")
+            return python_exec
+
         if not os.path.exists(profile_path):
             print(f"No repo_profile.yaml found in {repo_path}. Using EnvironmentOrchestrator.")
+
             from forgeos.sandbox.env_orchestrator import EnvironmentOrchestrator
             orch = EnvironmentOrchestrator(repo_path)
             success, logs = orch.setup_environment()
@@ -87,35 +94,76 @@ class SandboxRunner:
         return True
 
     def run_tests(self, repo_path: str, test_targets: list[str] = None, escalate_on_fail: bool = True) -> dict:
-        """Runs the test suite within the sandbox, with support for targeted execution and escalation."""
-        # Bootstrap dependencies before running tests
+        """Runs the test suite. Auto-installs pytest-json-report if missing. Falls back to plain pytest."""
         python_exec = self.bootstrap_environment(repo_path)
-            
+
+        # Ensure pytest and pytest-json-report are available in the venv
+        subprocess.run(
+            [python_exec, "-m", "pip", "install", "-q", "pytest", "pytest-json-report"],
+            cwd=repo_path, capture_output=True
+        )
+
         report_file = os.path.join(repo_path, ".report.json")
-        base_cmd = [python_exec, "-m", "pytest", "--json-report", f"--json-report-file={report_file}"]
-        
-        if test_targets:
-            command = base_cmd + test_targets
-            print(f"Running targeted tests: {' '.join(command)} in {repo_path}")
-        else:
-            command = base_cmd
-            print(f"Running full test suite in {repo_path} with JSON reporting")
-            
-        result = subprocess.run(command, cwd=repo_path, capture_output=True, text=True)
-        
-        # Escalation logic: if targeted tests fail to execute (e.g. not found) or we want to be safe on failure
+
+        def _run(cmd):
+            return subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True)
+
+        # Try with json-report first
+        base_cmd = [python_exec, "-m", "pytest", "--json-report", f"--json-report-file={report_file}", "-v"]
+        command = base_cmd + (test_targets or [])
+        result = _run(command)
+
+        # If json-report plugin errors out use plain pytest
+        if result.returncode not in [0, 1, 2, 5] and ("no module named" in result.stderr.lower() or "unrecognized" in result.stderr.lower()):
+            print("pytest-json-report unavailable, falling back to plain pytest...")
+            base_cmd = [python_exec, "-m", "pytest", "-v"]
+            command = base_cmd + (test_targets or [])
+            result = _run(command)
+
+        # Escalation: if targeted test files not found, try full suite
         if result.returncode not in [0, 5] and test_targets and escalate_on_fail:
-            print("Targeted tests failed or not found. Escalating to full test suite...")
-            command = base_cmd
-            result = subprocess.run(command, cwd=repo_path, capture_output=True, text=True)
+            print("Targeted tests not found. Escalating to full suite...")
+            command = [python_exec, "-m", "pytest", "-v"]
+            result = _run(command)
+
+        # returncode 5 = no tests collected — treat as pass (repo has no tests yet)
+        status = "success" if result.returncode in [0, 5] else "failed"
+        if result.returncode == 5:
+            print("No tests found in repo — treating as pass (no test failures).")
+
+        # --- PHASE 2: MATRYOSHKA INTEGRATION TEST (For Self-Hosting Safety) ---
+        # If we are testing a patch on ForgeAI itself, unit tests passing is NOT ENOUGH.
+        # We must prove the core engine can still boot and run a dummy payload without crashing.
+        # This prevents "Suicide Loops" where a patch passes tests but breaks the orchestrator.
+        if status == "success" and ("ForgeAI" in repo_path or repo_path.endswith("ForgeAI")):
+            print("--- INITIATING PHASE 2: MATRYOSHKA INTEGRATION TEST ---")
+            # We run the E2E test script inside the guest sandbox as our integration proof
+            # using the guest's own python executable
+            matryoshka_cmd = [python_exec, "test_pattern_library_e2e.py"]
+            matryoshka_result = _run(matryoshka_cmd)
             
+            if matryoshka_result.returncode != 0:
+                print("--- MATRYOSHKA PHASE 2 FAILED ---")
+                print("The patch passed unit tests but the engine crashed during integration boot!")
+                print(matryoshka_result.stderr)
+                status = "failed"
+                # Rewrite the output to forcefully flag this as a suicide patch
+                result.stderr = "FATAL: INTEGRATION SUICIDE DETECTED.\n" + matryoshka_result.stderr
+                result.stdout = result.stdout + "\n[MATRYOSHKA] Integration failed.\n" + matryoshka_result.stdout
+                result.returncode = matryoshka_result.returncode
+            else:
+                print("--- MATRYOSHKA PHASE 2 PASSED ---")
+                result.stdout = result.stdout + "\n[MATRYOSHKA] Engine booted successfully in guest sandbox."
+
         return {
-            "status": "success" if result.returncode in [0, 5] else "failed",
+            "status": status,
             "output": result.stdout,
             "errors": result.stderr,
             "returncode": result.returncode,
             "command": " ".join(command)
         }
+
+
         
     def commit_and_push(self, repo_path: str, branch_name: str, commit_message: str) -> bool:
         """Commits the current changes and pushes them to the given branch."""
