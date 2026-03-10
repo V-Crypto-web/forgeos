@@ -11,15 +11,45 @@ class SymbolVisitor(ast.NodeVisitor):
         self.classes = []
         self.functions = []
         self.imports = []
+        self.current_scope = []
+        self.calls = {}
         
     def visit_ClassDef(self, node):
         self.classes.append({'name': node.name, 'lineno': getattr(node, 'lineno', 1), 'end_lineno': getattr(node, 'end_lineno', getattr(node, 'lineno', 1))})
+        self.current_scope.append(node.name)
         self.generic_visit(node)
+        self.current_scope.pop()
         
+    def _handle_func(self, node):
+        scope_name = node.name
+        if self.current_scope:
+            scope_name = f"{self.current_scope[-1]}.{node.name}"
+            
+        self.functions.append({'name': scope_name, 'lineno': getattr(node, 'lineno', 1), 'end_lineno': getattr(node, 'end_lineno', getattr(node, 'lineno', 1)), 'calls': []})
+        self.current_scope.append(scope_name)
+        self.calls[scope_name] = []
+        self.generic_visit(node)
+        self.current_scope.pop()
+
     def visit_FunctionDef(self, node):
-        self.functions.append({'name': node.name, 'lineno': getattr(node, 'lineno', 1), 'end_lineno': getattr(node, 'end_lineno', getattr(node, 'lineno', 1))})
-        self.generic_visit(node)
+        self._handle_func(node)
         
+    def visit_AsyncFunctionDef(self, node):
+        self._handle_func(node)
+        
+    def visit_Call(self, node):
+        if self.current_scope:
+            caller = self.current_scope[-1]
+            callee_name = None
+            if isinstance(node.func, ast.Name):
+                callee_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                callee_name = node.func.attr
+            
+            if callee_name and callee_name not in self.calls.get(caller, []):
+                self.calls.setdefault(caller, []).append(callee_name)
+        self.generic_visit(node)
+
     def visit_Import(self, node):
         for alias in node.names:
             self.imports.append(alias.name)
@@ -75,7 +105,7 @@ class RepoAnalyzer:
             start_idx = max(0, func['lineno'] - 1)
             end_idx = min(len(lines), func['end_lineno'])
             snippet = '\n'.join(lines[start_idx:end_idx])
-            rich_functions.append({'name': func['name'], 'snippet': snippet})
+            rich_functions.append({'name': func['name'], 'snippet': snippet, 'calls': analyzer.calls.get(func['name'], [])})
         
         return {
             "classes": rich_classes,
@@ -260,6 +290,26 @@ class RepoAnalyzer:
                 json.dump(import_graph, f, indent=2)
             with open(os.path.join(cache_dir, "test_map.json"), "w", encoding="utf-8") as f:
                 json.dump(test_map, f, indent=2)
+                
+            # Epic 48: Generate Symbol Graph for Caller/Callee tracing
+            symbol_graph = {}
+            for filepath, data in repo_map.items():
+                if "error" in data: continue
+                # Register all symbols
+                for func in data.get("functions", []):
+                    # Handle both old (string) and new (dict) formats
+                    name = func.get("name") if isinstance(func, dict) else func
+                    calls = func.get("calls", []) if isinstance(func, dict) else []
+                    symbol_graph[name] = {"file": filepath, "callees": calls, "callers": [], "imports": data.get("imports", [])}
+            # Compute Callers (Reverse graph)
+            for caller_name, info in symbol_graph.items():
+                for callee_name in info["callees"]:
+                    if callee_name in symbol_graph and caller_name not in symbol_graph[callee_name]["callers"]:
+                        symbol_graph[callee_name]["callers"].append(caller_name)
+                        
+            with open(os.path.join(cache_dir, "symbol_graph.json"), "w", encoding="utf-8") as f:
+                json.dump(symbol_graph, f, indent=2)
+                
         except Exception as e:
             print(f"Failed to save cache artifacts: {e}")
 
@@ -276,9 +326,11 @@ class RepoAnalyzer:
                 file_summary.append(f"  Error parsing: {data['error']}")
             else:
                 if data.get('classes'):
-                    file_summary.append(f"  Classes: {', '.join(data['classes'])}")
+                    class_names = [c.get("name") if isinstance(c, dict) else c for c in data['classes']]
+                    file_summary.append(f"  Classes: {', '.join(class_names)}")
                 if data.get('functions'):
-                    file_summary.append(f"  Functions: {', '.join(data['functions'])}")
+                    func_names = [f.get("name") if isinstance(f, dict) else f for f in data['functions']]
+                    file_summary.append(f"  Functions: {', '.join(func_names)}")
                 if data.get('imports'):
                     file_summary.append(f"  Dependencies: {', '.join(data['imports'])}")
             

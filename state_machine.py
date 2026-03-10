@@ -2,7 +2,13 @@ from enum import Enum
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 import os
-import re
+
+# ── Triage Mode ───────────────────────────────────────────────────────────────
+# Set FORGEOS_TRIAGE_MODE=1 in .env to lock the engine to the golden path only:
+#   INIT → FETCH_ISSUE → PLAN → PATCH → RUN_TESTS → VERIFY → DONE / FAILED
+# All autonomous enrichment layers are bypassed. Flip to 0 to restore full autonomy.
+def _triage() -> bool:
+    return os.environ.get("FORGEOS_TRIAGE_MODE", "0").strip() in ("1", "true", "yes")
 
 class EngineState(str, Enum):
     INIT = "INIT"
@@ -164,6 +170,13 @@ class StateMachine:
             context.run_ledger.append_event(event_type, payload)
 
     def _trigger_learning_loop(self, context: ExecutionContext, outcome: str):
+        # TRIAGE_MODE: learning loop is disabled to reduce noise
+        if _triage():
+            if context.logs is not None:
+                msg = "[TRIAGE] Learning loop skipped (FORGEOS_TRIAGE_MODE=1). Outcome was: " + outcome
+                context.logs.append(msg)
+            return
+
         """Asynchronously triggers the LLM to extract the pattern from the run execution so it can be used for future instances."""
         if context.telemetry:
             context.telemetry.log_event("pattern_learning_triggered", context.issue_number or "task", context.current_state.value, f"Started pattern extraction for outcome: {outcome}")
@@ -299,6 +312,13 @@ class StateMachine:
             context.current_state = EngineState.PLAN
             return context
 
+        # TRIAGE_MODE: skip pattern retrieval — go straight to PLAN
+        if _triage():
+            context.logs.append("[TRIAGE] Pattern retrieval skipped (FORGEOS_TRIAGE_MODE=1). Proceeding to PLAN.")
+            context.pattern_context = {"similar_patterns_found": 0, "status": "Skipped in triage mode."}
+            context.current_state = EngineState.PLAN
+            return context
+
         context.current_state = EngineState.PATTERN_RETRIEVAL
         return context
 
@@ -426,6 +446,17 @@ class StateMachine:
         else:
             self.log_and_record(context, "✅ Plan aligns with Project Constitution.")
             
+        if context.artifact_manager:
+            context.artifact_manager.save_plan(context.plan)
+            context.logs.append("Plan saved to artifact layer.")
+
+        # TRIAGE_MODE: skip Council deliberation and IMPACT_ANALYSIS — go straight to PATCH
+        if _triage():
+            context.logs.append("[TRIAGE] Council deliberation skipped (FORGEOS_TRIAGE_MODE=1).")
+            context.logs.append("[TRIAGE] Impact analysis skipped (FORGEOS_TRIAGE_MODE=1). Proceeding to PATCH.")
+            context.current_state = EngineState.PATCH
+            return context
+
         # Council Deliberation Loop
         from forgeos.agents.council import CouncilAgent
         council = CouncilAgent(router)
@@ -456,10 +487,6 @@ class StateMachine:
                     context.logs.append(f"Revised plan generated [COST: ${r_cost:.4f}]")
                 else:
                     context.logs.append("Council max retries reached. Proceeding with last rejected plan (Fallback).")
-        
-        if context.artifact_manager:
-            context.artifact_manager.save_plan(context.plan)
-            context.logs.append("Plan saved to artifact layer.")
 
         # [HACK FOR EPIC 63 Ouroboros Run] - BranchRace injects hallucinated patches.
         # Skip it entirely and let the main Coder Agent generate with proper repo context.
@@ -667,8 +694,12 @@ class StateMachine:
             else:
                 context.logs.append("Multi-Critic APPROVED the patch.")
 
+            # TRIAGE_MODE: skip patch simulation — go straight to RUN_TESTS
+            if _triage():
+                context.logs.append("[TRIAGE] Patch simulation skipped (FORGEOS_TRIAGE_MODE=1). Proceeding to RUN_TESTS.")
+                context.current_state = EngineState.RUN_TESTS
             # Epic 46: Feature Flag for A/B Benchmarking
-            if os.environ.get("FORGEOS_ENABLE_PATCH_SIM", "true").lower() == "false":
+            elif os.environ.get("FORGEOS_ENABLE_PATCH_SIM", "true").lower() == "false":
                 context.logs.append("OMNIBENCH: Patch Simulation disabled via feature flag. Proceeding directly to tests.")
                 context.current_state = EngineState.RUN_TESTS
             else:
@@ -761,141 +792,208 @@ class StateMachine:
         self.touch_heartbeat(context, "Bootstrapping environment and running tests")
 
         # ── Apply patch to disk before running tests ──────────────────────────
-        # context.patch is a unified diff string. Write it to a temp file and
-        # apply it with `git apply` so pytest evaluates the patched code.
+        # Patch Protocol v2: primary=search_replace JSON, fallback=unified_diff
         patch_applied = False
-        patch_guard_failure = None   # set to error string when Guard rejects the patch
+        patch_guard_failure = None
         repo_path = context.repo_path if context.repo_path else "."
         patch_tmp = None
+
+        # ── Branch Isolation (Epic 67) ─────────────────────────────────────────
+        # Create a per-task git branch so any failed patch can be rolled back
+        # without corrupting the live working tree for subsequent tasks.
+        import subprocess as _sp_branch
+        _task_branch = None
+        _base_branch = "master"
+        _git_available = False
+        try:
+            _check = _sp_branch.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=repo_path, capture_output=True, text=True
+            )
+            if _check.returncode == 0:
+                _git_available = True
+                # Save current branch
+                _head = _sp_branch.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=repo_path, capture_output=True, text=True
+                )
+                _base_branch = (_head.stdout.strip() or "master")
+                # Create + checkout task branch
+                _tid = str(getattr(context, "traceability_id", None) or getattr(context, "issue_number", "x"))
+                _task_branch = f"task-{_tid[:16]}"
+                _sp_branch.run(
+                    ["git", "checkout", "-b", _task_branch],
+                    cwd=repo_path, capture_output=True, text=True
+                )
+                context.logs.append(f"[BRANCH ISOLATION] Checked out branch: {_task_branch}")
+        except Exception as _be:
+            context.logs.append(f"[BRANCH ISOLATION] git branch setup skipped: {_be}")
+
+
         if context.patch:
-            import tempfile, subprocess as sp
-            try:
-                # Strip markdown fences if present (LLM sometimes wraps in ```diff)
-                raw_patch = context.patch
-                lines = raw_patch.split("\n")
-                
-                # First, unpack from markdown fences if needed
-                if "```" in raw_patch:
+            import tempfile, subprocess as sp, json as _json, os as _os
+
+            # ── Detect patch mode ─────────────────────────────────────────────
+            raw = context.patch.strip()
+
+            # Strip markdown fences to find JSON
+            if "```" in raw:
+                inside = False
+                fence_lines = []
+                for _line in raw.split("\n"):
+                    if _line.startswith("```"):
+                        inside = not inside
+                        continue
+                    if inside:
+                        fence_lines.append(_line)
+                raw = "\n".join(fence_lines).strip()
+
+            # ── Mode: search_replace (primary) ────────────────────────────────
+            _was_json = False
+            if raw.startswith("{") and '"mode"' in raw:
+                _was_json = True
+                try:
+                    patch_obj = _json.loads(raw)
+                    mode = patch_obj.get("mode", "")
+
+                    if mode == "search_replace":
+                        target_file = patch_obj.get("file", "")
+                        search_text = patch_obj.get("search", "")
+                        replace_text = patch_obj.get("replace", "")
+
+                        if not target_file or search_text is None:
+                            patch_guard_failure = "MALFORMED_PATCH: search_replace missing 'file' or 'search' key"
+                        elif target_file.split("/")[-1].startswith("test_") or target_file.split("/")[-1].endswith("_test.py"):
+                            patch_guard_failure = (
+                                f"MALFORMED_PATCH: patching test files is forbidden. "
+                                f"Target was: {target_file}. You must patch the SOURCE file instead."
+                            )
+                        else:
+                            abs_path = _os.path.join(repo_path, target_file)
+                            if not _os.path.isfile(abs_path):
+                                patch_guard_failure = f"MALFORMED_PATCH: target file not found: {target_file}"
+                            else:
+                                with open(abs_path, "r", encoding="utf-8") as _f:
+                                    file_content = _f.read()
+                                if search_text not in file_content:
+                                    patch_guard_failure = (
+                                        f"PATCH_NOT_FOUND: search string not found in {target_file}. "
+                                        f"First 80 chars of search: {search_text[:80]!r}"
+                                    )
+                                else:
+                                    new_content = file_content.replace(search_text, replace_text, 1)
+                                    with open(abs_path, "w", encoding="utf-8") as _f:
+                                        _f.write(new_content)
+                                    patch_applied = True
+                                    context.logs.append(
+                                        f"Patch applied via search_replace: {target_file} "
+                                        f"({len(search_text)} chars → {len(replace_text)} chars)"
+                                    )
+                        # Clear raw — don't let git apply run on JSON
+                        raw = ""
+
+                    elif mode == "full_file_rewrite":
+                        target_file = patch_obj.get("file", "")
+                        new_content = patch_obj.get("content", "")
+                        if not target_file or new_content is None:
+                            patch_guard_failure = "MALFORMED_PATCH: full_file_rewrite missing 'file' or 'content' key"
+                        else:
+                            abs_path = _os.path.join(repo_path, target_file)
+                            if not _os.path.isfile(abs_path):
+                                patch_guard_failure = f"MALFORMED_PATCH: target file not found: {target_file}"
+                            else:
+                                with open(abs_path, "w", encoding="utf-8") as _f:
+                                    _f.write(new_content)
+                                patch_applied = True
+                                context.logs.append(f"Patch applied via full_file_rewrite: {target_file}")
+                        # Clear raw — don't let git apply run on JSON
+                        raw = ""
+
+                    elif mode == "unified_diff":
+                        # Legacy path: extract diff from JSON and route to git apply below
+                        raw = patch_obj.get("patch", "")
+
+                    else:
+                        patch_guard_failure = f"MALFORMED_PATCH: unknown patch mode '{mode}'"
+                        raw = ""
+
+                except _json.JSONDecodeError as _je:
+                    patch_guard_failure = f"MALFORMED_PATCH: JSON parse error: {_je}"
+                    raw = ""  # Don't let git apply run on malformed JSON
+
+            # ── Mode: unified_diff (legacy fallback) ──────────────────────────
+            # TRIAGE_MODE: unified_diff is disabled — search_replace is the only allowed protocol
+            if _triage() and not patch_applied and not patch_guard_failure and raw:
+                patch_guard_failure = (
+                    "[TRIAGE] unified_diff patch protocol is disabled in triage mode. "
+                    "Only search_replace JSON patches are accepted. "
+                    "Ensure the Coder outputs: {\"mode\":\"search_replace\",\"file\":\"...\",\"search\":\"...\",\"replace\":\"...\"}"
+                )
+                raw = ""
+            if not patch_applied and not patch_guard_failure and raw:
+                try:
+                    # Strip any remaining fences from raw diff
+                    diff_lines = []
                     inside = False
-                    fenced_lines = []
-                    for line in lines:
-                        if line.startswith("```"):
+                    for _line in raw.split("\n"):
+                        if _line.startswith("```"):
                             inside = not inside
                             continue
-                        if inside:
-                            fenced_lines.append(line)
-                    lines = fenced_lines
+                        if inside or not _line.startswith("```"):
+                            diff_lines.append(_line)
+                    diff_text = "\n".join(diff_lines)
 
-                # Now aggressively sanitize to valid git-apply lines
-                patch_lines = []
-                for line in lines:
-                    # Valid patch lines start with these prefixes.
-                    # Relaxed a bit to avoid stripping normal diff context
-                    valid_starts = ("---", "+++", "@@", "+", "-", " ", "\\", "diff ", "index ")
-                    if any(line.startswith(prefix) for prefix in valid_starts) or line.strip() == "":
-                        patch_lines.append(line)
-                        
-                raw_patch = "\n".join(patch_lines)
-
-                # ── Patch Corruption Guard ────────────────────────────────────
-                def _validate_patch(patch_text: str) -> "tuple[bool, str]":
-                    """Pre-flight check. Returns (is_valid, reason)."""
-                    plines = patch_text.split("\n")
-                    has_file_header = False
-                    i = 0
-                    while i < len(plines):
-                        line = plines[i]
-                        if line.startswith("--- "):
-                            path_a = line[4:].strip()
-                            # Find paired +++
-                            j = i + 1
-                            while j < len(plines) and plines[j].strip() == "":
-                                j += 1
-                            if j >= len(plines):
-                                return False, f"Patch truncated after '--- {path_a}' — missing +++ header"
-                            next_line = plines[j]
-                            if not next_line.startswith("+++ "):
-                                return False, f"Expected '+++ ...' after '--- {path_a}', got: {next_line[:60]!r}"
-                            path_b = next_line[4:].strip()
-                            # Detect truncated path (ends with /)
-                            if path_b.endswith("/"):
-                                return False, f"Truncated +++ path (ends with '/'): {next_line[:80]!r}"
-                            if not path_b:
-                                return False, f"Empty +++ path in header: {next_line[:80]!r}"
-                            has_file_header = True
-                            i = j + 1
-                            continue
-                        if line.startswith("@@") and line.count("@@") < 2:
-                            return False, f"Malformed @@ hunk header: {line[:60]!r}"
-                        i += 1
-                    if not has_file_header:
-                        return False, "Patch contains no --- / +++ file headers"
-                    return True, "ok"
-
-                is_valid_patch, patch_reason = _validate_patch(raw_patch)
-                if not is_valid_patch:
-                    _guard_msg = f"MALFORMED_PATCH: Header validation failed: {patch_reason}"
-                    context.logs.append(f"[PATCH CORRUPTION GUARD] {_guard_msg}")
-                    context.logs.append(f"Patch preview: {raw_patch[:300]!r}")
-                    patch_applied = False
-                    patch_guard_failure = _guard_msg
-                else:
-                    with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
-                        f.write(raw_patch)
-                        patch_tmp = f.name
-
-                    # Dry-run first — validates without touching disk
-                    # --recount: auto-fix @@ hunk line count mismatches (common LLM error)
-                    dry = sp.run(
-                        ["git", "apply", "--check", "--recount", "--whitespace=fix", patch_tmp],
-                        cwd=repo_path, capture_output=True, text=True
-                    )
-                    if dry.returncode != 0:
-                        _guard_msg = f"MALFORMED_PATCH: git apply --check failed: {dry.stderr[:300]}"
-                        context.logs.append(f"[PATCH CORRUPTION GUARD] {_guard_msg}")
-                        patch_applied = False
-                        patch_guard_failure = _guard_msg
+                    # Basic header check
+                    if "--- " not in diff_text or "+++ " not in diff_text:
+                        patch_guard_failure = "MALFORMED_PATCH: unified_diff missing --- / +++ headers"
                     else:
-                        result = sp.run(
-                            ["git", "apply", "--recount", "--whitespace=fix", patch_tmp],
+                        with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
+                            f.write(diff_text)
+                            patch_tmp = f.name
+
+                        dry = sp.run(
+                            ["git", "apply", "--check", "--recount", "--whitespace=fix", patch_tmp],
                             cwd=repo_path, capture_output=True, text=True
                         )
-                        if result.returncode == 0:
-                            patch_applied = True
-                            context.logs.append(f"Patch applied successfully via git apply.")
+                        if dry.returncode != 0:
+                            _guard_msg = f"MALFORMED_PATCH: git apply --check failed: {dry.stderr[:300]}"
+                            context.logs.append(f"[PATCH CORRUPTION GUARD] {_guard_msg}")
+                            patch_guard_failure = _guard_msg
                         else:
-                            context.logs.append(f"git apply failed (rc={result.returncode}): {result.stderr[:200]}")
-                            context.logs.append(f"Attempting fallback to GNU patch...")
-                            result2 = sp.run(
-                                ["patch", "--force", "--no-backup-if-mismatch", "-p1", "-F3", "-i", patch_tmp],
+                            result = sp.run(
+                                ["git", "apply", "--recount", "--whitespace=fix", patch_tmp],
                                 cwd=repo_path, capture_output=True, text=True
                             )
-                            if result2.returncode == 0:
+                            if result.returncode == 0:
                                 patch_applied = True
-                                context.logs.append(f"Patch applied successfully via patch fallback.")
+                                context.logs.append("Patch applied successfully via unified_diff (legacy).")
                             else:
-                                context.logs.append(f"GNU patch fallback failed (rc={result2.returncode}): {result2.stderr[:200]}\nStdout: {result2.stdout[:200]}")
-
-            except Exception as e:
-                context.logs.append(f"Patch application error: {e}")
+                                context.logs.append(f"git apply failed (rc={result.returncode}): {result.stderr[:200]}")
+                                result2 = sp.run(
+                                    ["patch", "--force", "--no-backup-if-mismatch", "-p1", "-F3", "-i", patch_tmp],
+                                    cwd=repo_path, capture_output=True, text=True
+                                )
+                                if result2.returncode == 0:
+                                    patch_applied = True
+                                    context.logs.append("Patch applied via GNU patch fallback.")
+                                else:
+                                    patch_guard_failure = f"MALFORMED_PATCH: git apply + GNU patch both failed: {result2.stderr[:200]}"
+                except Exception as e:
+                    patch_guard_failure = f"Patch application error: {e}"
 
         # ── Short-circuit: if Guard rejected patch, skip sandbox entirely ──────
         if patch_guard_failure:
+            advice = (
+                "ADVICE: Use search_replace protocol:\n"
+                '{"mode":"search_replace","file":"path/to/file.py","search":"exact existing text","replace":"new text"}\n'
+                "The 'search' value MUST exist verbatim in the file."
+            )
             context.test_results = {
                 "status": "failed",
                 "output": "",
-                "errors": (
-                    f"{patch_guard_failure}\n\n"
-                    "ADVICE: The Coder generated a structurally invalid unified diff.\n"
-                    "REQUIRED FIX: Regenerate the patch following this format:\n"
-                    "  --- a/path/to/file.py\n"
-                    "  +++ b/path/to/file.py\n"
-                    "  @@ -LINE,COUNT +LINE,COUNT @@\n"
-                    "  (context / + added / - removed lines)\n"
-                    "NEVER truncate the +++ path. NEVER omit @@ hunks."
-                ),
+                "errors": f"{patch_guard_failure}\n\n{advice}",
                 "returncode": 2,
-                "command": "git apply --check (patch_guard)",
+                "command": "patch_applier (protocol_v2)",
             }
             if context.artifact_manager:
                 context.artifact_manager.save_test_results(context.test_results)
@@ -1000,6 +1098,28 @@ class StateMachine:
             f"returncode={context.test_results.get('returncode')} "
             f"patch_applied={patch_applied}"
         )
+
+        # ── Branch Isolation: rollback on failure, track for merge on success ──
+        if _task_branch and _git_available:
+            test_passed = context.test_results.get("status") == "passed"
+            try:
+                import subprocess as _sp_b2
+                if test_passed:
+                    # Keep changes in branch — merge will happen when DONE is confirmed
+                    context.logs.append(f"[BRANCH ISOLATION] Tests passed. Branch {_task_branch} ready for merge.")
+                    # Store branch info for the DONE handler to use
+                    if not hasattr(context, 'metadata') or context.metadata is None:
+                        context.metadata = {}
+                    context.metadata["task_branch"] = _task_branch
+                    context.metadata["base_branch"] = _base_branch
+                else:
+                    # Rollback: discard all changes and return to base branch
+                    _sp_b2.run(["git", "checkout", "--", "."], cwd=repo_path, capture_output=True)
+                    _sp_b2.run(["git", "checkout", _base_branch], cwd=repo_path, capture_output=True)
+                    _sp_b2.run(["git", "branch", "-D", _task_branch], cwd=repo_path, capture_output=True)
+                    context.logs.append(f"[BRANCH ISOLATION] Tests failed. Rolled back to {_base_branch}, deleted {_task_branch}.")
+            except Exception as _be2:
+                context.logs.append(f"[BRANCH ISOLATION] Branch cleanup warning: {_be2}")
 
         context.current_state = EngineState.VERIFY
         return context
@@ -1507,6 +1627,30 @@ Fixes #{context.issue_number}
 
     def handle_done(self, context: ExecutionContext) -> ExecutionContext:
         context.logs.append("Finalizing execution and drafting PR summary.")
+
+        # ── Branch Isolation: merge task branch to base on DONE ──────────────
+        meta = getattr(context, 'metadata', None) or {}
+        _task_br = meta.get("task_branch")
+        _base_br = meta.get("base_branch", "master")
+        repo_path = context.repo_path if context.repo_path else "."
+        if _task_br:
+            try:
+                import subprocess as _sp_done
+                _sp_done.run(["git", "checkout", _base_br], cwd=repo_path, capture_output=True)
+                merge = _sp_done.run(
+                    ["git", "merge", "--squash", _task_br],
+                    cwd=repo_path, capture_output=True, text=True
+                )
+                if merge.returncode == 0:
+                    _sp_done.run(
+                        ["git", "commit", "-m", f"[ForgeOS] Auto-merge {getattr(context, 'traceability_id', getattr(context, 'issue_number', 'task'))}"],
+                        cwd=repo_path, capture_output=True
+                    )
+                    context.logs.append(f"[BRANCH ISOLATION] Merged {_task_br} → {_base_br}")
+                _sp_done.run(["git", "branch", "-D", _task_br], cwd=repo_path, capture_output=True)
+            except Exception as _me:
+                context.logs.append(f"[BRANCH ISOLATION] Merge warning: {_me}")
+
         from forgeos.providers.model_router import ProviderRouter
         from forgeos.agents.pr_generator import PRGeneratorAgent
         

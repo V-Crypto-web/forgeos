@@ -7,6 +7,7 @@ class FailureCategory(str, Enum):
     """
     ENVIRONMENT_FAILURE = "ENVIRONMENT_FAILURE"      # OS level, missing packages, bad path
     DEPENDENCY_CONFLICT = "DEPENDENCY_CONFLICT"      # pip/poetry install failed, ModuleNotFoundError
+    MALFORMED_PATCH = "MALFORMED_PATCH"              # git apply --check failed, corrupt unified diff
     TEST_SELECTION_FAILURE = "TEST_SELECTION_FAILURE" # Elected to run tests that don't exist
     PATCH_REGRESSION = "PATCH_REGRESSION"            # Introduced a bug or failed existing test
     NONDETERMINISM = "NONDETERMINISM"                # Flaky test (succeeded then failed)
@@ -25,6 +26,9 @@ class FailureTaxonomyEngine:
         error_lower = error_output.lower()
         command_lower = command.lower()
         
+        if "malformed_patch" in error_lower or "corrupt patch" in error_lower or "patch corruption guard" in error_lower:
+            return FailureCategory.MALFORMED_PATCH
+
         if "modulenotfounderror" in error_lower or "importerror" in error_lower:
             return FailureCategory.DEPENDENCY_CONFLICT
             

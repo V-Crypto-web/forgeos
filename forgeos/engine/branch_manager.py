@@ -215,7 +215,12 @@ Output ONLY a valid unified diff patch (git diff format). No explanations.
 """
         patch_resp = router.generate_response(
             ModelRole.CODER,
-            system_prompt="You are a code patch generator. Output ONLY a unified diff.",
+            system_prompt="""You are the Coder. Given the context, generate ONLY a unified diff patch.
+CRITICAL: Your unified diff must be 100% valid for `git apply`.
+- DO NOT use placeholders like `...` or `// code continues`.
+- You MUST include the exact unchanged context lines around your additions/deletions.
+- If you skip context lines or use pseudocode, the patch will corrupt and fail.
+- Output ONLY the raw patch enclosed in ```diff ... ```.""",
             user_prompt=patch_prompt,
         )
         patch = patch_resp.get("content", "")
@@ -238,11 +243,10 @@ Output ONLY a valid unified diff patch (git diff format). No explanations.
         try:
             from forgeos.agents.critics.impact_simulator import PatchSimulatorAgent
             sim = PatchSimulatorAgent(router)
-            sim_result, sim_stats = sim.simulate(
+            sim_result, sim_stats = sim.simulate_impact(
                 issue_text=issue_text,
-                plan=plan,
                 patch=patch,
-                repo_path=repo_path,
+                symbol_index_str="{}"
             )
             cost += sim_stats.get("cost", 0.0)
             sim_approved = sim_result.get("status", "REJECTED") == "APPROVED"

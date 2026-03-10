@@ -11,11 +11,11 @@ def main():
     
     run_parser = subparsers.add_parser("run", help="Run ForgeOS on a known issue")
     run_parser.add_argument("--repo", required=True, help="GitHub repository (e.g., username/repo_name or full URL)")
-    run_parser.add_argument("--issue", required=True, type=int, help="Issue number to resolve")
+    run_parser.add_argument("--issue", required=True, help="Issue number to resolve, or path to a local markdown file")
     
     epic_parser = subparsers.add_parser("epic", help="Delegate a large Epic into Sub-Tasks via CTO Agent")
     epic_parser.add_argument("--repo", required=True, help="GitHub repository (e.g., username/repo_name or full URL)")
-    epic_parser.add_argument("--issue", required=True, type=int, help="Epic issue number to resolve")
+    epic_parser.add_argument("--issue", required=True, help="Epic issue number to resolve, or path to a local markdown file")
     
     repair_parser = subparsers.add_parser("repair", help="Repair an issue in a real third-party repo")
     repair_parser.add_argument("repo", help="Repository URL to repair")
@@ -27,8 +27,14 @@ def main():
     
     # Extract issue number from URL if necessary
     issue_number = args.issue
+    local_issue_text = None
     if isinstance(issue_number, str):
-        if "github.com" in issue_number:
+        if os.path.exists(issue_number):
+            print(f"Loading local issue file: {issue_number}")
+            with open(issue_number, "r", encoding="utf-8") as f:
+                local_issue_text = f.read()
+            issue_number = 9999
+        elif "github.com" in issue_number:
             issue_number = int(issue_number.split("/")[-1])
         elif issue_number.isdigit():
             issue_number = int(issue_number)
@@ -58,7 +64,10 @@ def main():
             epic_title = ""
             epic_body = ""
             
-            if "ForgeAI" in repo_url or os.environ.get("FORGEOS_MOCK_LLM") == "true":
+            if local_issue_text:
+                epic_title = local_issue_text.split("\n")[0].replace("# ", "")
+                epic_body = local_issue_text
+            elif "ForgeAI" in repo_url or os.environ.get("FORGEOS_MOCK_LLM") == "true":
                 with open(bench_file, "r") as f:
                     tasks = json.load(f)
                     task = next((t for t in tasks if t["id"] == issue_number), None)

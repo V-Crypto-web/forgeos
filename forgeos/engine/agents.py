@@ -16,8 +16,33 @@ class CoderAgent:
         self.router = router
         
     def generate_patch(self, context_pack: str) -> Tuple[str, Dict[str, Any]]:
-        sys_prompt = "You are the Coder. Given the context, generate ONLY a unified diff patch."
-        response = self.router.generate_response(ModelRole.CODER, sys_prompt, context_pack)
+        sys_prompt = """You are the Coder. Output ONLY a unified diff patch, valid for `git apply`.
+
+HARD RULES — violating any of these causes instant rejection:
+1. MODIFY EXISTING FILES ONLY. NEVER create new files (no `--- /dev/null` blocks).
+2. Touch AT MOST 1 file per patch.
+3. Change AT MOST 30 lines total (additions + removals combined).
+4. Every hunk MUST be complete — NEVER truncate mid-hunk.
+5. Context lines (unchanged) start with exactly ONE SPACE. Not zero spaces, not two.
+6. `@@ -LINE,COUNT +LINE,COUNT @@` counts MUST match the actual lines in the hunk.
+7. DO NOT add imports outside the function scope if it avoids creating a new file.
+
+FORMAT (follow exactly):
+```diff
+--- a/forgeos/path/to/file.py
++++ b/forgeos/path/to/file.py
+@@ -10,4 +10,5 @@
+ def existing_function():
+-    old_line = True
++    new_line = True
++    extra_line = 42
+     return result
+```
+
+ASYNC RULES: Always `await` coroutine calls. Use `asyncio.run()` inside sync functions.
+
+Output ONLY the ```diff block. No explanation."""
+        response = self.router.generate_response(ModelRole.CODER, sys_prompt, context_pack, max_tokens=4096)
         return response["content"], response
 
 class VerifierAgent:
@@ -40,11 +65,18 @@ class CriticAgent:
 Your job is to review a proposed code patch BEFORE it is executed to catch bad engineering judgments, overly broad changes, or incorrect strategies.
 You will be provided with the Issue, the Plan, the proposed Patch, and the Impact Report.
 
+ASYNC CHECKLIST:
+1. Does the patch introduce any new `async` calls without an `await`?
+2. Does the patch call `await` inside a synchronous function?
+3. Does the patch return a coroutine object instead of awaiting it?
+If ANY of these are true, you MUST REJECT the patch.
+
 Evaluate the patch against the following criteria:
 1. Does the patch align with solving the specific issue?
 2. Is the patch too broad? (e.g., touching files unnecessarily)
 3. Does it break architectural invariants or contracts?
 4. Is it a safe approach given the risk score?
+5. Does it pass the ASYNC CHECKLIST?
 
 Respond ONLY with a valid JSON object in the following format:
 {
@@ -53,7 +85,12 @@ Respond ONLY with a valid JSON object in the following format:
     "advice": "Actionable advice for the Coder or Planner on what to fix"
 }"""
         
-        user_prompt = f"=== ISSUE ===\\n{issue_text}\\n\\n=== PLAN ===\\n{plan}\\n\\n=== IMPACT REPORT ===\\nRisk Score: {impact_report.get('risk_score', 'Unknown')}\\nAllowed Strategy: {impact_report.get('allowed_strategy', 'Unknown')}\\n\\n=== PROPOSED PATCH ===\\n{patch}\\n"
+        static_warning = ""
+        patch_lower = patch.lower()
+        if ("asyncio" in patch_lower or ".generate_" in patch_lower or "async" in patch_lower) and "await " not in patch_lower and "asyncio.run" not in patch_lower:
+             static_warning = "\n[STATIC CHECKER WARNING]: The patch appears to involve async logic or IO calls, but the literal 'await' or 'asyncio.run' keyword is missing. Strongly consider REJECTING this patch for Async Safety reasons unless you are absolutely certain it is correct.\n"
+
+        user_prompt = f"=== ISSUE ===\\n{issue_text}\\n\\n=== PLAN ===\\n{plan}\\n\\n=== IMPACT REPORT ===\\nRisk Score: {impact_report.get('risk_score', 'Unknown')}\\nAllowed Strategy: {impact_report.get('allowed_strategy', 'Unknown')}\\n\\n=== PROPOSED PATCH ===\\n{patch}\\n{static_warning}"
         
         response = self.router.generate_response(ModelRole.CRITIC, sys_prompt, user_prompt)
         

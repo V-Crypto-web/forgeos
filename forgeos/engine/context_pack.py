@@ -6,8 +6,8 @@ CHARS_PER_TOKEN = 4
 
 class TokenBudget:
     PLANNER_MAX = 8000
-    CODER_MAX = 8000
-    RETRY_MAX = 10000
+    CODER_MAX = 16000   # increased: large files need full context for accurate hunks
+    RETRY_MAX = 12000
 
 class ContextPackBuilder:
     """
@@ -269,7 +269,65 @@ RECENT FAILURES:
     def build_coder_prompt(self) -> str:
         """
         Builds a hierarchical prompt for the coder.
+        Injects actual file content for relevant files so the LLM can generate
+        line-accurate diffs instead of hallucinating line numbers.
         """
+        # Extract relevant file paths from plan + issue text
+        import re, glob
+        plan_text = self.ctx.plan or ""
+        issue_text = self.ctx.issue_text or ""
+        combined_text = plan_text + "\n" + issue_text
+        repo_root = self.ctx.repo_path if self.ctx.repo_path else "."
+
+        relevant_files = []
+
+        # Strategy 1: find full relative paths like `forgeos/engine/state_machine.py`
+        for path in re.findall(r'[\w/]+\.py', combined_text):
+            full_path = os.path.join(repo_root, path)
+            if os.path.exists(full_path):
+                relevant_files.append((path, full_path))
+
+        # Strategy 2: find bare module names like `state_machine`, `policies`, etc.
+        # and resolve them by searching the repo with glob
+        bare_names = re.findall(r'\b([a-z][a-z_]+)\b', combined_text)
+        seen_names = set()
+        for name in bare_names:
+            if name in seen_names or len(name) < 5:
+                continue
+            seen_names.add(name)
+            matches = glob.glob(os.path.join(repo_root, "**", f"{name}.py"), recursive=True)
+            for m in matches[:1]:  # take first match only
+                rel = os.path.relpath(m, repo_root)
+                if (rel, m) not in relevant_files:
+                    relevant_files.append((rel, m))
+
+        # Deduplicate and limit
+        seen_paths = set()
+        deduped = []
+        for item in relevant_files:
+            if item[1] not in seen_paths:
+                seen_paths.add(item[1])
+                deduped.append(item)
+        relevant_files = deduped[:4]  # Max 4 files to stay within token budget
+
+        # Build file content block with FULL content (up to 400 lines) for accurate diffs
+        file_content_block = ""
+        for rel_path, full_path in relevant_files:
+            try:
+                with open(full_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    # Up to 400 lines — enough for any realistic target file
+                    lines_list = content.split("\n")
+                    lines = lines_list[:400]
+                    # Add line numbers so the LLM can write precise @@ hunk headers
+                    numbered = [f"{i+1:4d}: {l}" for i, l in enumerate(lines)]
+                    content_preview = "\n".join(numbered)
+                    if len(lines_list) > 400:
+                        content_preview += f"\n# ... ({len(lines_list) - 400} more lines not shown)"
+                file_content_block += f"\n### FILE: {rel_path}\n```python\n{content_preview}\n```\n"
+            except Exception:
+                pass
+
         l1_context = f"""=== [L0] SCOPE CONSTRAINTS (PATCH BUDGET) ===
 You are bounded by strict Execution Limits to prevent Scope Explosion.
 Write a `narrow_local_patch` that strictly targets the issue without breaking architectural boundaries.
@@ -285,11 +343,12 @@ RECENT FAILURES:
 {self.get_compressed_failure_memory()}
 """
         l2_context = f"""
-=== [L2] SUPPORTING CONTEXT ===
+=== [L2] ACTUAL FILE CONTENT (Use these EXACT line numbers in your diff) ===
 ISSUE REF:
 {self.ctx.issue_text[:200]}...
+
+{file_content_block if file_content_block else "No file content available — use repo map for guidance."}
 """
-        
         
         pruned_map = self._prune_repo_map(max_files=50)
         l3_context = f"""

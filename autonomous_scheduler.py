@@ -66,6 +66,37 @@ ALLOWED_RISK_ZONES = {"green", "yellow"}
 
 failed_epics = set()
 
+# ── Signature Cooldown Guard ──────────────────────────────────────────────────
+# Prevents the Opportunity Engine from looping on the same failure class forever.
+# { signature_keyword: (consecutive_fail_count, cooldown_until_ts) }
+_sig_fail_counts: dict = collections.defaultdict(lambda: [0, 0.0])
+SIG_MAX_CONSECUTIVE = 3      # block after this many back-to-back same-sig failures
+SIG_COOLDOWN_SECS   = 3600  # 1 hour cooldown
+
+def _is_sig_cooled_down(keywords: list) -> bool:
+    """Return True if any keyword from the epic title is in cooldown."""
+    now = time.time()
+    for kw in keywords:
+        entry = _sig_fail_counts.get(kw)
+        if entry and entry[0] >= SIG_MAX_CONSECUTIVE and now < entry[1]:
+            return True
+    return False
+
+def _record_sig_fail(keywords: list):
+    """Increment failure count for these keywords; set cooldown if limit hit."""
+    now = time.time()
+    for kw in keywords:
+        _sig_fail_counts[kw][0] += 1
+        if _sig_fail_counts[kw][0] >= SIG_MAX_CONSECUTIVE:
+            _sig_fail_counts[kw][1] = now + SIG_COOLDOWN_SECS
+            log.warning(f"[SIG COOLDOWN] '{kw}' hit {SIG_MAX_CONSECUTIVE} failures — cooling down for 1h")
+
+def _reset_sig_ok(keywords: list):
+    """Reset failure count on success."""
+    for kw in keywords:
+        if kw in _sig_fail_counts:
+            _sig_fail_counts[kw][0] = 0
+
 # Priority → numeric weight for scoring
 PRIORITY_WEIGHT = {"high": 1.0, "medium": 0.6, "low": 0.3}
 
@@ -245,18 +276,27 @@ def run_once():
         _emit("no_candidates", "No eligible tasks in backlog — scheduler idle.")
         return None
 
-    # 3. Score all candidates
+    # 3. Score all candidates (skip any in signature cooldown)
     scored = []
     for item in candidates:
+        title = (item.get("title") or item.get("description", "")).lower()
+        kws = [w for w in title.split() if len(w) > 4]
+        if _is_sig_cooled_down(kws):
+            log.info(f"  {item['id']} [SIG COOLDOWN] — skipping (same-failure-class in cooldown)")
+            continue
         score = _score_item(item, landscape, total_failures)
         log.info(f"  {item['id']} [{item.get('priority','?')} priority] → score={score}")
         _emit("task_scored", f"{item['id']} scored {score}", {
             "id": item["id"], "title": item["title"], "score": score
         })
-        scored.append((score, item))
+        scored.append((score, item, kws))
+
+    if not scored:
+        log.info("All candidates in signature cooldown. Scheduler idle.")
+        return None
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    best_score, best_item = scored[0]
+    best_score, best_item, best_kws = scored[0]
     log.info(f"Selected: {best_item['id']} (score={best_score})")
     _emit("task_selected", f"Top candidate: {best_item['id']} — {best_item['title']}", {
         "id": best_item["id"], "score": best_score, "priority": best_item.get("priority")
@@ -362,7 +402,16 @@ def run_loop(interval: int = 300):
 
     `interval` is only used as a "no work to do" cooldown, not a fixed heartbeat.
     """
+    # TRIAGE_MODE guard: scheduler is disabled while debugging the golden path
+    if os.environ.get("FORGEOS_TRIAGE_MODE", "0").strip() in ("1", "true", "yes"):
+        log.warning(
+            "[TRIAGE] Autonomous scheduler is DISABLED (FORGEOS_TRIAGE_MODE=1). "
+            "Set FORGEOS_TRIAGE_MODE=0 to re-enable autonomous scheduling."
+        )
+        return
+
     log.info(f"Autonomous Scheduler starting. Idle interval: {interval}s")
+
     _emit("scheduler_started", f"Event-driven loop started (idle_interval={interval}s)", {
         "idle_interval": interval,
         "max_concurrent": MAX_CONCURRENT,
@@ -390,13 +439,17 @@ def run_loop(interval: int = 300):
         if tick_status == "dispatched" and dispatched_task_id:
             # Task just started — wait for it to finish, then re-tick immediately
             log.info(f"Task dispatched ({dispatched_task_id}). Watching for completion…")
+            epic_kws = [w for w in (tick_state.get("selected", {}).get("title", "").lower()).split() if len(w) > 4]
             status = _wait_for_task_completion(dispatched_task_id)
             if status == "FAILED":
                 epic_id = tick_state.get("selected", {}).get("id")
                 if epic_id:
                     failed_epics.add(epic_id)
                     log.info(f"Task {dispatched_task_id} FAILED. Added epic {epic_id} to blocklist.")
+                _record_sig_fail(epic_kws)
                 time.sleep(10)
+            else:
+                _reset_sig_ok(epic_kws)
             log.info("Task done. Re-ticking immediately.")
 
         elif tick_status == "blocked_active_task":

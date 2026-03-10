@@ -20,8 +20,13 @@ class ExecutionCritic:
 A patch was executed but the tests or CI failed with category: {failure_category}.
 Analyze WHY it failed and provide targeted guidance. Focus on runtime syntax, test failures, or missing dependencies.
 
-CRITICAL UPGRADE (Epic 41 Phase 14):
+CRITICAL UPGRADE (Epic 41 Phase 14) + ASYNC SAFETY PACK:
 If the error output contains "coroutine 'X' was never awaited", "RuntimeWarning: coroutine", or "object 'coroutine' has no attribute", you must EXPLICITLY flag this as an Async/Await Semantic Break. Your advice MUST instruct the Coder to either add the `await` keyword, or if inside a synchronous function, to use `asyncio.run()` or refactor the caller to be `async def`. Do not provide generic syntax advice if a coroutine mismatch is detected.
+
+ASYNC CHECKLIST (Must Verify):
+1. Did a synchronous function call an async function without `asyncio.run()`?
+2. Did an async function call another coroutine without `await`?
+3. Did the code attempt to access properties of a coroutine object instead of its result?
 
 Respond ONLY with a valid JSON object:
 {{

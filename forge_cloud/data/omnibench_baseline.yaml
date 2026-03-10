@@ -1,0 +1,34 @@
+# OmniBench Baseline Configuration Freeze
+# Snapshot Date: March 2026
+# Stack Version: cognitive_stack_v2 + throughput_stack_current
+
+benchmark_target: "taxonomy_tasks.json" (18 Core Issue Subsets)
+runs_per_issue: 1
+
+engine_parameters:
+  max_retries: 3
+  heuristic_recovery_enabled: true
+  
+memory_layers:
+  failure_memory_enabled: true
+  pattern_library_enabled: true
+  
+agents_active:
+  - PlannerAgent
+  - CoderAgent
+  - ArchitectAgent (Deadlock Resolution)
+  - TestAdequacyAgent (Verification Deficit detection)
+  - ExecutionCritic (Test & Syntax analysis)
+  - FailureIntelligenceEngine (Post-run Failure Mining)
+
+recent_upgrades_active:
+  - Epic 47: Cognitive Failure Mining (JSON traces)
+  - Epic 53: Venv Fast-Clone Caching (rsync base envs)
+  - Epic 52: Pytest Structured Failure Parser (.report.json LLM payloads)
+  
+models:
+  planner: "claude-3-7-sonnet"
+  coder: "claude-3-7-sonnet"
+  critic: "claude-3-5-sonnet-latest" (optimizing for speed/cost on logs)
+  architect: "claude-3-7-sonnet"
+  verifier: "claude-3-5-sonnet-latest"

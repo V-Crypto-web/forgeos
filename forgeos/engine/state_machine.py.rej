@@ -1,0 +1,10 @@
+--- forgeos/engine/state_machine.py
++++ forgeos/engine/state_machine.py
+@@ -67,6 +68,7 @@
+ 
+ class StateMachine:
+     ...
+ 
+     def handle_fetch_issue(self, context: ExecutionContext) -> ExecutionContext:
++        repo_full_name = context.github_url.split('/')[-2] + '/' + context.github_url.split('/')[-1]
+         # Validate repo_full_name

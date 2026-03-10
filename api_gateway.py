@@ -45,7 +45,15 @@ TASK_REGISTRY_PATH = "/tmp/forgeos_task_registry.json"
 PROJECT_REGISTRY_PATH = "/tmp/forgeos_project_registry.json"
 
 class _PersistentRegistry(dict):
-    """Dict subclass that auto-saves to disk on every write."""
+    """Dict subclass that auto-saves to disk on every write.
+    
+    Enforces a retention policy: keeps the latest REGISTRY_HOT_LIMIT terminal
+    tasks (DONE/FAILED). Older terminal tasks are archived to JSONL and pruned
+    from the hot dict to prevent unbounded memory growth.
+    """
+    REGISTRY_HOT_LIMIT = 500   # max DONE/FAILED tasks kept in hot memory
+    ARCHIVE_PATH = "/tmp/forgeos_task_archive.jsonl"
+
     def __init__(self, path: str):
         super().__init__()
         self._path = path
@@ -66,9 +74,30 @@ class _PersistentRegistry(dict):
         except Exception:
             pass
 
+    def trim(self):
+        """Archive + remove oldest terminal tasks beyond REGISTRY_HOT_LIMIT."""
+        terminal = [(k, v) for k, v in self.items()
+                    if v.get("status") in ("DONE", "FAILED")]
+        if len(terminal) <= self.REGISTRY_HOT_LIMIT:
+            return
+        terminal.sort(key=lambda x: x[1].get("started_at", ""))
+        to_archive = terminal[:len(terminal) - self.REGISTRY_HOT_LIMIT]
+        try:
+            with open(self.ARCHIVE_PATH, "a", encoding="utf-8") as af:
+                for _, record in to_archive:
+                    af.write(json.dumps(record, default=str) + "\n")
+        except Exception:
+            pass
+        for k, _ in to_archive:
+            super().__delitem__(k)
+        self._save()
+
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
         self._save()
+        # Trim periodically: only when a task completes
+        if isinstance(value, dict) and value.get("status") in ("DONE", "FAILED"):
+            self.trim()
 
     def __delitem__(self, key):
         super().__delitem__(key)
@@ -144,7 +173,7 @@ def _run_engine_background(repo_path: str, issue_number: int, task_id: str):
             github_url=TASK_REGISTRY[task_id].get("github_url", ""),
             issue_number=issue_number,
             strategy=TASK_REGISTRY[task_id].get("mode", "supervised"),
-            racing_enabled=True,
+            racing_enabled=False if os.environ.get("FORGEOS_TRIAGE_MODE", "0").strip() in ("1", "true", "yes") else True,
         )
 
 
@@ -295,11 +324,32 @@ async def create_project(req: ProjectCreateRequest):
     return PROJECT_REGISTRY[project_id]
 
 # ── Task Registry Endpoints ───────────────────────────────────────────────────
+@app.get("/api/v1/tasks/summary")
+async def tasks_summary():
+    """Lightweight KPI endpoint — returns counts only, no full task data."""
+    counts = {"RUNNING": 0, "DONE": 0, "FAILED": 0, "total": len(TASK_REGISTRY)}
+    for t in TASK_REGISTRY.values():
+        s = t.get("status", "UNKNOWN")
+        counts[s] = counts.get(s, 0) + 1
+    return counts
+
 @app.get("/api/v1/tasks")
-async def list_tasks():
-    """Returns all tasks, newest first."""
-    tasks = sorted(TASK_REGISTRY.values(), key=lambda t: t["started_at"], reverse=True)
-    return tasks
+async def list_tasks(
+    limit: int = 50,
+    status: str = None,
+    after: str = None,
+):
+    """Returns tasks newest first. Supports ?limit=N, ?status=DONE|FAILED|RUNNING, ?after=task_id."""
+    tasks = sorted(TASK_REGISTRY.values(), key=lambda t: t.get("started_at", ""), reverse=True)
+    if status:
+        tasks = [t for t in tasks if t.get("status") == status.upper()]
+    if after:
+        # Return tasks started before the given task_id's started_at (cursor pagination)
+        pivot = TASK_REGISTRY.get(after, {})
+        pivot_time = pivot.get("started_at", "")
+        if pivot_time:
+            tasks = [t for t in tasks if t.get("started_at", "") < pivot_time]
+    return tasks[:limit]
 
 @app.get("/api/v1/tasks/{task_id}")
 async def get_task(task_id: str):
@@ -618,6 +668,13 @@ def get_scheduler_status():
 @app.post("/api/v1/scheduler/start")
 def start_scheduler(interval: int = 1800):
     """Starts the autonomous_scheduler.py in the background."""
+    # TRIAGE_MODE: scheduler cannot be started while golden path debugging is active
+    if os.environ.get("FORGEOS_TRIAGE_MODE", "0").strip() in ("1", "true", "yes"):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "message": "TRIAGE_MODE active. Set FORGEOS_TRIAGE_MODE=0 in .env to enable the scheduler."}
+        )
     if _scheduler_is_running():
         return {"ok": False, "message": "Scheduler already running"}
     env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(__file__))}
@@ -644,6 +701,57 @@ def stop_scheduler():
         return {"ok": True, "message": f"Scheduler stopped (PID {pid})"}
     except Exception as e:
         return {"ok": False, "message": str(e)}
+
+
+# ── Triage Status Endpoint ────────────────────────────────────────────────────────────────
+@app.get("/api/v1/triage/status")
+def get_triage_status():
+    """
+    Truth table endpoint for triage mode.
+    Returns one row per task with all fields needed to debug the golden path.
+    """
+    triage_active = os.environ.get("FORGEOS_TRIAGE_MODE", "0").strip() in ("1", "true", "yes")
+    rows = []
+    tasks = sorted(TASK_REGISTRY.values(), key=lambda t: t.get("started_at", ""), reverse=True)
+    for t in tasks[:100]:  # last 100 tasks
+        # Determine patch protocol from last log line mentioning a protocol
+        patch_protocol = "unknown"
+        for log_line in reversed(t.get("logs", [])):
+            if "search_replace" in log_line:
+                patch_protocol = "search_replace"
+                break
+            elif "unified_diff" in log_line:
+                patch_protocol = "unified_diff"
+                break
+            elif "full_file_rewrite" in log_line:
+                patch_protocol = "full_file_rewrite"
+                break
+        # Last error = most recent log line starting with a known failure token
+        last_error = None
+        for log_line in reversed(t.get("logs", [])):
+            if any(tok in log_line for tok in ("PATCH_NOT_FOUND", "MALFORMED_PATCH", "FAILED", "Error", "error", "[TRIAGE]")):
+                last_error = log_line[:200]
+                break
+        rows.append({
+            "task_id":       t.get("id"),
+            "project":       t.get("repo", "").split("/")[-1] if t.get("repo") else t.get("epic_title", ""),
+            "issue":         t.get("issue"),
+            "current_state": t.get("current_state"),
+            "status":        t.get("status"),
+            "retry_count":   len([l for l in t.get("logs", []) if "RETRY" in l or "retry" in l.lower()]),
+            "patch_protocol": patch_protocol,
+            "last_error":    last_error,
+            "started_at":    t.get("started_at"),
+            "updated_at":    t.get("updated_at"),
+            "terminal_reason": t.get("terminal_reason"),
+            "global_cost":   t.get("global_cost", 0.0),
+        })
+    return {
+        "triage_mode": triage_active,
+        "scheduler_running": _scheduler_is_running(),
+        "task_count": len(rows),
+        "tasks": rows,
+    }
 
 
 @app.get("/api/v1/races")

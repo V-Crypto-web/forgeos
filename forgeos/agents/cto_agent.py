@@ -35,17 +35,18 @@ RULES:
 3. Order matters. Foundation/Models must be built before API usage.
 
 Respond ONLY with this valid JSON schema:
-{
+Respond ONLY with this valid JSON schema:
+{{
   "epic_summary": "Brief 1-sentence technical sum-up",
   "sub_tasks": [
-    {
+    {{
       "order": 1,
       "title": "Short title",
       "description": "Very specific technical instructions. e.g., 'Add a calculate_discount method to models.py'",
       "expected_files_to_touch": ["path/to/models.py"]
-    }
+    }}
   ]
-}"""
+}}"""
 
         user_prompt = f"=== EPIC REQUEST ===\nTITLE: {epic_title}\n\nBODY:\n{epic_body}\n\n=== REPO ARCHITECTURE ===\n{repo_map_summary}"
         

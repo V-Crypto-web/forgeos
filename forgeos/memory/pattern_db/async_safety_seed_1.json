@@ -1,0 +1,17 @@
+{
+  "pattern_id": "async_safety_seed_1",
+  "repo_class": "any",
+  "issue_class": "feature_or_bug",
+  "failure_signature": "async_missing_await",
+  "strategy": "Holistic Async Verification: Enforce 'await' on all async calls and trap sync wrappers via asyncio.run()",
+  "test_scope": "async/integration",
+  "patch_width": "isolated",
+  "outcome": "success",
+  "timestamp": "2026-03-08T18:36:58.270151",
+  "description": "When fixing async misalignments or calling AI providers (like .generate_response), always ensure you `await` the coroutine or wrap with `asyncio.run()`. NEVER return an unawaited coroutine implicitly. Verify sync/async boundaries.",
+  "usage_count": 100,
+  "success_count": 1,
+  "failure_count": 0,
+  "confidence_score": 0.0196078431372549,
+  "embedding": []
+}

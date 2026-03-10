@@ -146,7 +146,7 @@ class BenchmarkRunner:
             if "FORGEOS_MOCK_LLM" not in env:
                 env["FORGEOS_MOCK_LLM"] = "true" 
                 
-            cli_cmd = ["python3", "forge_cli.py", "--repo", repo_path, "--issue", str(issue_id)]
+            cli_cmd = ["python3", "forge_cli.py", "run", "--repo", repo_path, "--issue", str(issue_id)]
             
             start_t = time.time()
             try:

@@ -21,6 +21,22 @@ class FailureRecord(BaseModel):
     simulator_warning: str
     outcome: str
 
+def canonicalize_signature(sig: str) -> str:
+    sig = sig.lower()
+    if "coroutine" in sig and ("await" in sig or "never" in sig):
+        return "async_missing_await"
+    if "dependency_conflict" in sig:
+        return "dependency_conflict"
+    if "corrupt_patch" in sig or "patch_corruption" in sig:
+        return "corrupt_patch"
+    if "git_apply" in sig or "patch_application_failure" in sig:
+        return "git_apply_failure"
+    if "test_discovery" in sig or "test_suite_discovery" in sig:
+        return "test_discovery_failure"
+    if "nonetype" in sig:
+        return "nonetype_item_assignment"
+    return sig
+
 class FailureIntelligenceEngine:
     def __init__(self):
         self.router = ProviderRouter()
@@ -97,6 +113,8 @@ class FailureIntelligenceEngine:
             
             # The model_config will ignore extra fields if they are hallucinated
             record = FailureRecord.model_validate_json(res_str)
+            
+            record.failure_signature = canonicalize_signature(record.failure_signature)
             
             # Save the record
             record_id = str(uuid.uuid4())[:8]

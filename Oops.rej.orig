@@ -1,0 +1,7 @@
+@@ -1,5 +1,6 @@
+ from opportunity_detector import OpportunityDetector
++from epic_generator import generate_epic_markdown
+ 
+ def integrate_opportunity_detector(aggregated_signals, output_directory):
+     detector = OpportunityDetector()
+     opportunities = detector.detect_opportunities(aggregated_signals)
