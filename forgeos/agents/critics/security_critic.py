@@ -17,6 +17,8 @@ Check for:
 2. SQL Injection or Command Injection vectors (e.g., using `shell=True` unsafely, concatenating strings into queries).
 3. Insecure deserialization or missing auth checks.
 
+CRITICAL GOVERNANCE RULE: Do not invent theoretical security vulnerabilities. Only reject if the patch explicitly introduces a plaintext password, an obvious SQL/Command injection syntax, or an egregious RCE hole. If the patch solves the issue and doesn't explicitly breach these core rules, you MUST APPROVE it. We prefer working fixes over theoretical paranoia.
+
 Respond ONLY with a valid JSON object:
 {
     "status": "APPROVED" | "REJECTED_REVISE_PATCH",

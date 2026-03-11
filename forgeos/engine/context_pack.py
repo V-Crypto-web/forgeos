@@ -344,6 +344,8 @@ RECENT FAILURES:
 """
         l2_context = f"""
 === [L2] ACTUAL FILE CONTENT (Use these EXACT line numbers in your diff) ===
+CRITICAL: The line numbers shown below (e.g. `  12: `) are for your reference ONLY to build `@@ -X,Y +A,B @@` hunks. NEVER INCLUDE THEM IN YOUR ACTUAL OUTPUT PATCH!
+
 ISSUE REF:
 {self.ctx.issue_text[:200]}...
 

@@ -28,14 +28,16 @@ Respond ONLY with this JSON schema:
     "contract_break_risk": true | false,
     "affected_callers": ["file.py", "module.py"], // Based on your best guess from Symbol Index
     "verification_scope_recommendation": "unit_only" | "integration_plus_package" | "full_suite",
-    "strategy_decision": "proceed" | "reject_patch_and_replan",
+    "strategy_decision": "proceed" | "warn" | "soft_block" | "hard_block",
     "reasoning": "1-sentence explanation of the structural risk."
 }
 
 CRITICAL RULES:
-- If `contract_break_risk` is true and it affects public/core API, set `strategy_decision` to "reject_patch_and_replan".
+- `hard_block`: Catastrophic API breaks outside the scope of the issue, severe syntax breakage.
+- `soft_block`: Patch is too wide, or touches unrelated files.
+- `warn`: Behavioral change required by the issue (adding bounds checks, raising expected errors, adding guard clauses). This allows execution to proceed while noting the change.
 - If `risk_score` is high/critical, set `verification_scope_recommendation` to "full_suite" or "integration_plus_package".
-- Only reject if structurally reckless (missing await, shattered signature). Otherwise, "proceed" and let the real tests decide."""
+- Only use `hard_block` or `soft_block` if structurally reckless or harmful. If behavioral changes are requested by the issue (like catching an error, checking bounds, modifying state to fix a bug), DO NOT reject. Use `warn` or `proceed`. Do not block valid bugfixes just because they change behavior—changing behavior is the point!"""
 
         user_prompt = f"=== ISSUE TEXT ===\n{issue_text}\n\n=== SYMBOL INDEX EXCERPT ===\n{symbol_index_str[:2000]}\n\n=== PROPOSED PATCH ===\n{patch[:4000]}"
         

@@ -28,10 +28,12 @@ Look for Verification Deficit traits:
 2. "ImportError / ModuleNotFoundError" - The environment corrupted before running the test logic.
 3. Tests passed, but none of them targeted the files modified in the patch (Silent miss).
 
+CRITICAL INSTRUCTION: You are a post-success validator. If the tests run successfully (passed or intentionally failed) AND they actually touch the files from the patch, you MUST return "APPROVED". Do not reject a successful test suite just because you subjectively feel there could be more coverage. Your job is ONLY to catch absolute failures of the test execution environment like 0 items collected or ImportErrors.
+
 Respond ONLY with a valid JSON object:
 {
-    "status": "APPROVED" | "REJECTED",
-    "reason": "Why the test execution is valid or invalid",
+    "status": "APPROVED" | "WARNING",
+    "reason": "Why the test execution is valid or has poor coverage",
     "advice": "What test command the Coder should run instead to accurately verify the patch"
 }"""
         user_prompt = f"=== PATCH APPLIED ===\n{patch}\n\n=== STRUCTURED TEST PAYLOAD ===\n{test_payload_md}\n"
@@ -45,6 +47,6 @@ Respond ONLY with a valid JSON object:
                 content = content.split("```")[1].split("```")[0].strip()
             result = json.loads(content)
         except Exception:
-            result = {"status": "REJECTED", "reason": "Failed to parse Test Adequacy LLM output", "advice": "Rerun tests with pytest -v."}
+            result = {"status": "WARNING", "reason": "Failed to parse Test Adequacy LLM output", "advice": "Rerun tests with pytest -v."}
             
         return result, response

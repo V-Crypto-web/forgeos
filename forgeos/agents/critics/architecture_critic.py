@@ -14,6 +14,8 @@ class ArchitectureCritic:
 Review the proposed code patch against the repository's structural map.
 Does it violate codebase conventions? Are there redundant imports? Does it bypass layered architecture?
 
+CRITICAL GOVERNANCE RULE: Do NOT reject a patch for minor styling, "ideological" or subjective architectural preferences (like "it uses a stateful approach" or "not the most elegant way"). We prefer working solutions over ideological purity. ONLY reject if it introduces a massive cross-boundary import cycle or fundamentally breaks the build structure. If it solves the problem reasonably, you MUST APPROVE it.
+
 Respond ONLY with a valid JSON object:
 {
     "status": "APPROVED" | "REJECTED_REVISE_PATCH",

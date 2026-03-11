@@ -13,6 +13,7 @@ class FailureCategory(str, Enum):
     NONDETERMINISM = "NONDETERMINISM"                # Flaky test (succeeded then failed)
     SYNTAX_ERROR = "SYNTAX_ERROR"                    # Invalid Python/JSON syntax in the patch
     CONTEXT_FAILURE = "CONTEXT_FAILURE"              # Max tokens exceeded, context dropped
+    GOVERNANCE_REJECT = "GOVERNANCE_REJECT"          # Rejected by Product Owner, Simulator, etc.
     UNKNOWN = "UNKNOWN"
 
 class FailureTaxonomyEngine:
@@ -43,5 +44,8 @@ class FailureTaxonomyEngine:
             
         if "pytest" in command_lower and ("failed" in error_lower or "error" in error_lower):
             return FailureCategory.PATCH_REGRESSION
+            
+        if "simulation_reject" in error_lower or "multi_critic_rejection" in error_lower or "council rejected the plan" in error_lower:
+            return FailureCategory.GOVERNANCE_REJECT
             
         return FailureCategory.UNKNOWN

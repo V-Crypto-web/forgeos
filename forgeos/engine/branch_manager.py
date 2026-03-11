@@ -220,6 +220,7 @@ CRITICAL: Your unified diff must be 100% valid for `git apply`.
 - DO NOT use placeholders like `...` or `// code continues`.
 - You MUST include the exact unchanged context lines around your additions/deletions.
 - If you skip context lines or use pseudocode, the patch will corrupt and fail.
+- NEVER include the reference line numbers (e.g., `  12: `) from the context in your generated diff. Produce raw valid python code only!
 - Output ONLY the raw patch enclosed in ```diff ... ```.""",
             user_prompt=patch_prompt,
         )
