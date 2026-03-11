@@ -29,6 +29,7 @@ class TelemetryLogger:
             "metadata": metadata or {}
         }
         
+        os.makedirs(self.log_dir, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload) + "\n")
             

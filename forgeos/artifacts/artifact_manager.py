@@ -18,6 +18,7 @@ class ArtifactManager:
         
     def save_plan(self, plan_content: str) -> str:
         """Saves the generated execution plan."""
+        os.makedirs(self.artifacts_dir, exist_ok=True)
         filepath = os.path.join(self.artifacts_dir, "plan.md")
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(plan_content)
@@ -25,6 +26,7 @@ class ArtifactManager:
         
     def save_patch(self, patch_content: str, attempt: int = 1) -> str:
         """Saves the generated patch. Supports multiple attempts."""
+        os.makedirs(self.artifacts_dir, exist_ok=True)
         filepath = os.path.join(self.artifacts_dir, f"patch_attempt_{attempt}.diff")
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(patch_content)
@@ -32,6 +34,7 @@ class ArtifactManager:
         
     def save_impact_report(self, impact_data: Dict[str, Any]) -> str:
         """Saves the Change Impact Engine analysis report."""
+        os.makedirs(self.artifacts_dir, exist_ok=True)
         filepath = os.path.join(self.artifacts_dir, "impact_report.json")
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(impact_data, f, indent=2)
@@ -50,6 +53,7 @@ class ArtifactManager:
 
     def save_test_results(self, test_data: Dict[str, Any], attempt: int = 1) -> str:
         """Saves the results from the sandbox execution."""
+        os.makedirs(self.artifacts_dir, exist_ok=True)
         filepath = os.path.join(self.artifacts_dir, f"test_results_{attempt}.json")
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(test_data, f, indent=2)

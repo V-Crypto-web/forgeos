@@ -46,7 +46,8 @@ def execute_engine_flow(job_id: str, request: TaskRequest):
     context = ExecutionContext(
         issue_number=request.issue_number,
         parent_epic_id=request.parent_epic_id,
-        repo_path=workspace_path, 
+        repo_path=workspace_path,
+        github_url=request.repo_url if request.repo_url.startswith("http") else None,
         failure_memory=memory_manager,
         artifact_manager=artifact_manager,
         telemetry=telemetry_logger,

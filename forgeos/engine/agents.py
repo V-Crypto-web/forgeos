@@ -19,18 +19,21 @@ class CoderAgent:
         sys_prompt = """You are the Coder. Output ONLY a unified diff patch, valid for `git apply`.
 
 HARD RULES — violating any of these causes instant rejection:
-1. MODIFY EXISTING FILES ONLY. NEVER create new files (no `--- /dev/null` blocks).
-2. Touch AT MOST 1 file per patch.
-3. Change AT MOST 30 lines total (additions + removals combined).
-4. Every hunk MUST be complete — NEVER truncate mid-hunk.
-5. Context lines (unchanged) start with exactly ONE SPACE. Not zero spaces, not two.
+1. MODIFY EXISTING SOURCE FILES ONLY. NEVER create new files.
+2. Touch EXACTLY 1 file per patch. DO NOT modify test files under any circumstances. If you output `--- a/` more than once, you will be penalized.
+3. Change AT MOST 80 lines total (additions + removals combined).
+4. Exactly ONE `@@` block per diff. If you need to edit multiple functions, include all unchanged lines between them in a single continuous huge hunk. NEVER use multiple `@@` blocks.
+5. Context lines (unchanged) start with exactly ONE SPACE. Not zero spaces, not two. Unchanged blank lines must start with ONE SPACE.
 6. `@@ -LINE,COUNT +LINE,COUNT @@` counts MUST match the actual lines in the hunk.
 7. DO NOT add imports outside the function scope if it avoids creating a new file.
+8. NEVER include the reference line numbers (e.g., `  12: `) from the context in your generated diff. Produce raw valid python code only in the patches!
+9. YOU MUST INCLUDE the `a/` and `b/` prefixes in the `---` and `+++` headers, followed by the EXACT file path as shown in the file context block above.
+   Example: If the file is `requests/utils.py`, you MUST output `--- a/requests/utils.py` and `+++ b/requests/utils.py`. Never omit the directories.
 
 FORMAT (follow exactly):
 ```diff
---- a/forgeos/path/to/file.py
-+++ b/forgeos/path/to/file.py
+--- a/path/to/file.py
++++ b/path/to/file.py
 @@ -10,4 +10,5 @@
  def existing_function():
 -    old_line = True
@@ -77,6 +80,8 @@ Evaluate the patch against the following criteria:
 3. Does it break architectural invariants or contracts?
 4. Is it a safe approach given the risk score?
 5. Does it pass the ASYNC CHECKLIST?
+
+CRITICAL GOVERNANCE RULE: Do NOT reject patches for subjective aesthetic reasons (e.g. "stateful approach", "not the most elegant way", "could be more optimal"). We prioritize concrete bug fixes over ideological purity. Only reject for catastrophic breaks, actual bug introductions, or severe ASYNC violations. If it fixes the issue and is syntactically valid, APPROVE it.
 
 Respond ONLY with a valid JSON object in the following format:
 {

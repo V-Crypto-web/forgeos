@@ -26,6 +26,7 @@ class RunLedger:
             "event_type": event_type,
             "payload": payload
         }
+        os.makedirs(os.path.dirname(self.ledger_file), exist_ok=True)
         with open(self.ledger_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
             

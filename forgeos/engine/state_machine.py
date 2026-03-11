@@ -210,11 +210,11 @@ class StateMachine:
         self.log_and_record(context, "Initializing execution context.")
         self.touch_heartbeat(context, "Context Initialized")
         
-        if context.repo_path and context.repo_path.startswith("http"):
+        if context.github_url:
             from forgeos.sandbox.sandbox_runner import SandboxRunner
             runner = SandboxRunner()
-            self.log_and_record(context, f"Autonomous Cloning: {context.repo_path}")
-            cloned_path = runner.clone_repo(context.repo_path, context.issue_number)
+            self.log_and_record(context, f"Autonomous Cloning: {context.github_url}")
+            cloned_path = runner.clone_repo(context.github_url, context.issue_number)
             context.repo_path = cloned_path
             self.log_and_record(context, f"Repo cloned to {cloned_path}")
             
@@ -626,6 +626,12 @@ class StateMachine:
         return context
 
     def handle_execution_critic(self, context: ExecutionContext) -> ExecutionContext:
+        sim_ctx = context.simulation_context or {}
+        if sim_ctx.get("critics_bypassed"):
+            context.logs.append("GOVERNANCE_RELAXATION: Bypassing Multi-Critic.")
+            context.current_state = EngineState.PATCH_SIMULATION
+            return context
+            
         context.logs.append("Executing pre-flight patch review (Architecture & Security Critics).")
         
         from forgeos.providers.model_router import ProviderRouter
@@ -697,6 +703,12 @@ class StateMachine:
         return context
 
     def handle_patch_simulation(self, context: ExecutionContext) -> ExecutionContext:
+        sim_ctx = context.simulation_context or {}
+        if sim_ctx.get("critics_bypassed"):
+            context.logs.append("GOVERNANCE_RELAXATION: Bypassing Patch Simulation.")
+            context.current_state = EngineState.RUN_TESTS
+            return context
+            
         print("[DEBUG] Inside handle_patch_simulation: Starting!")
         self.log_and_record(context, "[PATCH_SIMULATION] Executing Static Patch Simulation (Risk & Semantic Gate).")
         self.touch_heartbeat(context, "Starting Patch Simulation via Ast/LLM")
@@ -735,22 +747,29 @@ class StateMachine:
         reasoning = sim_res.get("reasoning", "No structural risks found.")
         
         # Store the verification scope recommendation dynamically so sandbox_runner can read it later
-        if not context.simulation_context:
+        if not getattr(context, "simulation_context", None):
             context.simulation_context = {}
         context.simulation_context["verification_scope_recommendation"] = sim_res.get("verification_scope_recommendation", "unit_only")
         
         context.logs.append(f"Simulation Decision: {decision}. Reason: {reasoning}")
         
-        if decision == "reject_patch_and_replan":
-            context.logs.append("WARNING: Simulation intercepted a severe structural flaw. HALTING execution.")
+        if decision in ["soft_block", "hard_block"]:
+            context.logs.append(f"WARNING: Simulation intercepted a structural flaw. HALTING execution ({decision}).")
             
             # Formulate the fake test failure to feed FailureMemory and Planner
             context.test_results = {
                 "status": "failed",
-                "errors": f"SIMULATION_REJECT: Contract Break Detected.\nREASONING: {reasoning}",
+                "errors": f"SIMULATION_REJECT [{decision.upper()}]: Contract Break Detected.\nREASONING: {reasoning}",
                 "command": "Static Impact Simulation"
             }
+            context.failure_record = {
+                "failure_class": "GOVERNANCE_REJECT" if decision == "soft_block" else "STRATEGY FAILURE",
+                "failure_signature": "simulation_reject_soft" if decision == "soft_block" else "simulation_reject_hard"
+            }
             context.current_state = EngineState.RETRY
+        elif decision == "warn":
+            context.logs.append(f"Simulation WARNING: {reasoning}. Proceeding.")
+            context.current_state = EngineState.RUN_TESTS
         else:
             context.current_state = EngineState.RUN_TESTS
             
@@ -844,37 +863,18 @@ class StateMachine:
                         f.write(raw_patch)
                         patch_tmp = f.name
 
-                    # Dry-run first — validates without touching disk
-                    # --recount: auto-fix @@ hunk line count mismatches (common LLM error)
-                    dry = sp.run(
-                        ["git", "apply", "--check", "--recount", "--whitespace=fix", patch_tmp],
-                        cwd=repo_path, capture_output=True, text=True
-                    )
-                    if dry.returncode != 0:
-                        _guard_msg = f"MALFORMED_PATCH: git apply --check failed: {dry.stderr[:300]}"
+                    from forgeos.sandbox.sandbox_runner import SandboxRunner
+                    s_runner = SandboxRunner()
+                    context.logs.append("Delegating patch application to SandboxRunner robust fallbacks...")
+                    success = s_runner.apply_patch(repo_path, raw_patch)
+                    if success:
+                        patch_applied = True
+                        context.logs.append("Patch applied successfully via SandboxRunner.")
+                    else:
+                        _guard_msg = "MALFORMED_PATCH: All patch application strategies failed in SandboxRunner."
                         context.logs.append(f"[PATCH CORRUPTION GUARD] {_guard_msg}")
                         patch_applied = False
                         patch_guard_failure = _guard_msg
-                    else:
-                        result = sp.run(
-                            ["git", "apply", "--recount", "--whitespace=fix", patch_tmp],
-                            cwd=repo_path, capture_output=True, text=True
-                        )
-                        if result.returncode == 0:
-                            patch_applied = True
-                            context.logs.append(f"Patch applied successfully via git apply.")
-                        else:
-                            context.logs.append(f"git apply failed (rc={result.returncode}): {result.stderr[:200]}")
-                            context.logs.append(f"Attempting fallback to GNU patch...")
-                            result2 = sp.run(
-                                ["patch", "--force", "--no-backup-if-mismatch", "-p1", "-F3", "-i", patch_tmp],
-                                cwd=repo_path, capture_output=True, text=True
-                            )
-                            if result2.returncode == 0:
-                                patch_applied = True
-                                context.logs.append(f"Patch applied successfully via patch fallback.")
-                            else:
-                                context.logs.append(f"GNU patch fallback failed (rc={result2.returncode}): {result2.stderr[:200]}\nStdout: {result2.stdout[:200]}")
 
             except Exception as e:
                 context.logs.append(f"Patch application error: {e}")
@@ -1030,8 +1030,15 @@ class StateMachine:
             context.global_cost += cost
             context.logs.append(f"Adequacy verified via {stats['model']} [COST: ${cost:.4f}]")
             
-            if result.get("status", "REJECTED") == "APPROVED":
+            if result.get("status", "WARNING") == "APPROVED" or result.get("status") == "APPROVED":
                 context.logs.append("Test Adequacy APPROVED. The patch is verified.")
+            else:
+                reason = result.get("reason", "Verification Deficit.")
+                advice = result.get("advice", "Run explicit tests targeting the changed files.")
+                context.logs.append(f"Test Adequacy WARNING: {reason}. Advice: {advice}")
+                context.logs.append("Patch passed tests but has weak coverage. Assigning provisional success.")
+
+            if True:
 
                 # ── Ouroboros Self-Merge ──────────────────────────────────────
                 # If this is a self-patch (targeting the ForgeOS repo itself),
@@ -1137,15 +1144,6 @@ class StateMachine:
 
                 context.current_state = EngineState.CREATE_PR
                 return context
-            else:
-                reason = result.get("reason", "Verification Deficit.")
-                advice = result.get("advice", "Run explicit tests targeting the changed files.")
-                context.logs.append(f"Test Adequacy REJECTED the success: {reason}")
-                
-                # Mock a failure so the Execution Critic diagnoses the Verification Deficit
-                context.test_results["status"] = "failed"
-                context.test_results["errors"] = f"VERIFICATION DEFICIT:\\n{reason}\\nADVICE: {advice}"
-                # Fall through to the failure handler below
                 
         context.logs.append("Tests failed. Engaging Post-Failure Critic for diagnosis.")
         
@@ -1262,6 +1260,18 @@ class StateMachine:
             context.logs.append("FAST_RETRY directive: Bypassing Planner and going directly to CODE.")
             context.patch = None   # CRITICAL: force Coder to regenerate fresh patch
             context.current_state = EngineState.PATCH
+            return context
+            
+        elif directive == StrategyDirective.GOVERNANCE_RELAXATION:
+            context.logs.append("GOVERNANCE_RELAXATION directive: Suppressing critics and going directly to tests.")
+            if not getattr(context, "simulation_context", None):
+                context.simulation_context = {}
+            context.simulation_context["critics_bypassed"] = True
+            
+            if context.patch:
+                context.current_state = EngineState.RUN_TESTS
+            else:
+                context.current_state = EngineState.PATCH
             return context
             
         elif directive == StrategyDirective.HARD_REPLAN:

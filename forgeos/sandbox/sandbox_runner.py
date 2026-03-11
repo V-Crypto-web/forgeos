@@ -75,23 +75,86 @@ class SandboxRunner:
         return python_exec
 
     def apply_patch(self, repo_path: str, patch_content: str) -> bool:
-        """Applies a code patch to the repository."""
+        """Applies a code patch to the repository using multi-stage fallbacks."""
+        import re
+        
+        # Robustly extract the diff block from markdown fences using regex
+        cleaned_patch = patch_content
+        match = re.search(r"```(?:diff)?\n?(.*?)```", patch_content, flags=re.DOTALL)
+        if match:
+            cleaned_patch = match.group(1)
+            
+        # Fallback manual cleanup for dangling markdown or common hallucinations
+        cleaned_patch = cleaned_patch.strip() + "\n"
+        if cleaned_patch.startswith("```diff"):
+            cleaned_patch = cleaned_patch[7:].strip() + "\n"
+
+        # FIX COMMON LLM BUG: Empty context lines missing the leading space
+        fixed_lines = []
+        for line in cleaned_patch.split("\n"):
+            if line == "":
+                fixed_lines.append(" ")
+            else:
+                fixed_lines.append(line)
+        cleaned_patch = "\n".join(fixed_lines)
+
         patch_file = os.path.join(repo_path, "changes.patch")
         with open(patch_file, "w") as f:
-            f.write(patch_content)
+            f.write(cleaned_patch)
         
         print(f"Applying patch in {repo_path}")
-        result = subprocess.run(["git", "apply", "changes.patch"], cwd=repo_path, capture_output=True, text=True)
         
-        # Clean up patch file
+        # Strategy 1: Strict git apply (best for clean patches, respects git index)
+        result = subprocess.run(["git", "apply", "changes.patch"], cwd=repo_path, capture_output=True, text=True)
+        if result.returncode == 0:
+            os.remove(patch_file)
+            return True
+            
+        print(f"git apply failed: {result.stderr.strip()}. Falling back to Strategy 2 (patch -p1)...")
+        
+        # Strategy 2: Unix patch with fuzzing (lenient on context lines, assumes a/ and b/ prefixes)
+        # Using shell=True for input redirection
+        patch_cmd_1 = "patch --force -p1 --fuzz=3 < changes.patch"
+        res_p1 = subprocess.run(patch_cmd_1, cwd=repo_path, shell=True, capture_output=True, text=True)
+        if res_p1.returncode == 0:
+            print("Strategy 2 (patch -p1) succeeded.")
+            os.remove(patch_file)
+            return True
+            
+        print(f"patch -p1 failed: {res_p1.stdout.strip()}. Falling back to Strategy 3 (patch -p0)...")
+        
+        # Strategy 3: Unix patch without stripping prefixes (if LLM omitted a/ b/)
+        patch_cmd_0 = "patch --force -p0 --fuzz=3 < changes.patch"
+        res_p0 = subprocess.run(patch_cmd_0, cwd=repo_path, shell=True, capture_output=True, text=True)
+        if res_p0.returncode == 0:
+            print("Strategy 3 (patch -p0) succeeded.")
+            os.remove(patch_file)
+            return True
+            
+        print(f"patch -p0 failed: {res_p0.stdout.strip()}. Falling back to Strategy 4 (patch -p2)...")
+        
+        # Strategy 4: Unix patch -p2 (if LLM output a/repo_name/...)
+        patch_cmd_2 = "patch --force -p2 --fuzz=3 < changes.patch"
+        res_p2 = subprocess.run(patch_cmd_2, cwd=repo_path, shell=True, capture_output=True, text=True)
+        if res_p2.returncode == 0:
+            print("Strategy 4 (patch -p2) succeeded.")
+            os.remove(patch_file)
+            return True
+            
+        print(f"patch -p2 failed: {res_p2.stdout.strip()}. Falling back to Strategy 5 (patch -p3)...")
+
+        # Strategy 5: Unix patch -p3
+        patch_cmd_3 = "patch --force -p3 --fuzz=3 < changes.patch"
+        res_p3 = subprocess.run(patch_cmd_3, cwd=repo_path, shell=True, capture_output=True, text=True)
+        if res_p3.returncode == 0:
+            print("Strategy 5 (patch -p3) succeeded.")
+            os.remove(patch_file)
+            return True
+
+        print(f"ALL patch strategies failed. Final output: {res_p3.stdout.strip()}")
         if os.path.exists(patch_file):
             os.remove(patch_file)
-        
-        if result.returncode != 0:
-            print(f"Patch apply failed: {result.stderr}")
-            return False
-            
-        return True
+        return False
 
     def run_tests(self, repo_path: str, test_targets: list[str] = None, escalate_on_fail: bool = True) -> dict:
         """Runs the test suite. Auto-installs pytest-json-report if missing. Falls back to plain pytest."""
