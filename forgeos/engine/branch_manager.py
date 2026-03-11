@@ -392,7 +392,7 @@ def should_race(context) -> bool:
 
     issue_text = (getattr(context, "issue_text", "") or "").lower()
     TRIGGER_KEYWORDS = ["async", "race", "integration", "timeout", "deadlock",
-                        "concurren", "import", "dependency", "refactor"]
+                        "concurren", "import", "dependency", "refactor", "flaky"]
     keyword_hit = any(k in issue_text for k in TRIGGER_KEYWORDS)
 
     has_retries    = getattr(context, "retries", 0) > 0
